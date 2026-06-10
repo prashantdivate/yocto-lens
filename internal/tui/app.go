@@ -64,7 +64,12 @@ func (f findingItem) Title() string {
 }
 
 func (f findingItem) Description() string {
-	return fmt.Sprintf("%s %s:%d", severityBadge(f.Finding.Severity), compactPath(f.Finding.File, 90), f.Finding.Line)
+	return fmt.Sprintf(
+		"%s %s:%d",
+		severityBadge(f.Finding.Severity),
+		compactPath(f.Finding.File, 90),
+		f.Finding.Line,
+	)
 }
 
 func (f findingItem) FilterValue() string {
@@ -129,7 +134,10 @@ func New(r model.Report) App {
 
 func (a App) Init() tea.Cmd {
 	if a.state == StateScanning {
-		return tea.Batch(a.spinner.Tick, startScan(a.paths))
+		return tea.Batch(
+			a.spinner.Tick,
+			startScan(a.paths),
+		)
 	}
 	return nil
 }
@@ -146,11 +154,18 @@ func startScan(paths []string) tea.Cmd {
 				default:
 				}
 			})
-			doneCh <- scanDoneMsg{Report: report, Err: err}
+
+			doneCh <- scanDoneMsg{
+				Report: report,
+				Err:    err,
+			}
 			close(progressCh)
 		}()
 
-		return scanChannelsMsg{Progress: progressCh, Done: doneCh}
+		return scanChannelsMsg{
+			Progress: progressCh,
+			Done:     doneCh,
+		}
 	}
 }
 
@@ -161,7 +176,10 @@ func waitScan(progressCh <-chan model.ScanProgress, doneCh <-chan scanDoneMsg) t
 			return done
 		case p, ok := <-progressCh:
 			if !ok {
-				return progressMsg(model.ScanProgress{Phase: model.PhaseDone, Done: true})
+				return progressMsg(model.ScanProgress{
+					Phase: model.PhaseDone,
+					Done:  true,
+				})
 			}
 			return progressMsg(p)
 		}
@@ -170,9 +188,17 @@ func waitScan(progressCh <-chan model.ScanProgress, doneCh <-chan scanDoneMsg) t
 
 type findingDelegate struct{}
 
-func (d findingDelegate) Height() int                               { return 3 }
-func (d findingDelegate) Spacing() int                              { return 0 }
-func (d findingDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
+func (d findingDelegate) Height() int {
+	return 3
+}
+
+func (d findingDelegate) Spacing() int {
+	return 0
+}
+
+func (d findingDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
+	return nil
+}
 
 func (d findingDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	finding, ok := item.(findingItem)
@@ -188,6 +214,7 @@ func (d findingDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	bg := colorBg1
 	titleFg := colorAccent
 	descFg := colorText
+
 	if index == m.Index() {
 		bg = colorSelected
 		titleFg = colorBg0
@@ -207,9 +234,18 @@ func (d findingDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		Background(bg).
 		Foreground(descFg).
 		PaddingLeft(1).
-		Render(severityBadge(finding.Finding.Severity) + " " + compactPath(finding.Finding.File, width-15) + fmt.Sprintf(":%d", finding.Finding.Line))
+		Render(
+			severityBadge(finding.Finding.Severity) +
+				" " +
+				compactPath(finding.Finding.File, width-15) +
+				fmt.Sprintf(":%d", finding.Finding.Line),
+		)
 
-	blank := lipgloss.NewStyle().Width(width).Background(colorBg1).Render("")
+	blank := lipgloss.NewStyle().
+		Width(width).
+		Background(colorBg1).
+		Render("")
+
 	fmt.Fprint(w, title+"\n"+desc+"\n"+blank)
 }
 
@@ -227,6 +263,7 @@ func newFindingList(findings []model.Finding) list.Model {
 	l.SetShowHelp(false)
 	l.SetShowPagination(false)
 	l.SetShowFilter(false)
+
 	return l
 }
 
@@ -299,6 +336,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.list, cmd = a.list.Update(msg)
 		return a, cmd
 	}
+
 	return a, nil
 }
 
@@ -308,6 +346,7 @@ func (a *App) toggleMode() {
 	} else {
 		a.mode = ModeStaticAnalysis
 	}
+
 	a.list = newFindingList(a.visibleFindings())
 }
 
@@ -337,6 +376,7 @@ func (a App) View() string {
 
 func (a App) scanView() string {
 	w := a.contentWidth()
+
 	body := strings.Join([]string{
 		a.spinner.View() + " " + styleBold(colorAccent).Render("Scanning Yocto metadata"),
 		"",
@@ -356,7 +396,12 @@ func (a App) scanView() string {
 		muted("q quit"),
 	}, "\n")
 
-	screen := lipgloss.JoinVertical(lipgloss.Left, a.header(w), panel("scanner", body, w, 18))
+	screen := lipgloss.JoinVertical(
+		lipgloss.Left,
+		a.header(w),
+		panel("scanner", body, w, 18),
+	)
+
 	return rootFrame(a.width, a.height, screen)
 }
 
@@ -368,6 +413,7 @@ func (a App) errorView() string {
 
 func (a App) dashboardView() string {
 	w := a.contentWidth()
+
 	header := a.header(w)
 	modeBar := a.modeBar(w)
 	overview := a.overviewPanel(w)
@@ -375,6 +421,7 @@ func (a App) dashboardView() string {
 	gap := 1
 	leftW := int(float64(w) * 0.64)
 	rightW := w - leftW - gap
+
 	if leftW < 60 {
 		leftW = 60
 		rightW = w - leftW - gap
@@ -384,37 +431,74 @@ func (a App) dashboardView() string {
 		leftW = w - rightW - gap
 	}
 
-	mainHeight := a.height - 16
+	mainHeight := a.height - 17
 	if mainHeight < 12 {
 		mainHeight = 12
 	}
 
 	listWidth := leftW - 4
 	listHeight := mainHeight - 5
+
 	if listWidth < 20 {
 		listWidth = 20
 	}
 	if listHeight < 4 {
 		listHeight = 4
 	}
+
 	a.list.SetSize(listWidth, listHeight)
 
-	findingsBody := lipgloss.JoinVertical(lipgloss.Left, listBox(a.list.View(), listWidth, listHeight), a.pageIndicator(listWidth))
-	findings := panel("findings", findingsBody, leftW, mainHeight)
-	inspector := panel("inspector", a.previewText(rightW-4, mainHeight-2), rightW, mainHeight)
-	mainRow := lipgloss.JoinHorizontal(lipgloss.Top, findings, strings.Repeat(" ", gap), inspector)
+	findingsBody := lipgloss.JoinVertical(
+		lipgloss.Left,
+		listBox(a.list.View(), listWidth, listHeight),
+		a.pageIndicator(listWidth),
+	)
+
+	findings := panel(
+		"findings",
+		findingsBody,
+		leftW,
+		mainHeight,
+	)
+
+	inspector := panel(
+		"inspector",
+		a.previewText(rightW-4, mainHeight-2),
+		rightW,
+		mainHeight,
+	)
+
+	mainRow := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		findings,
+		strings.Repeat(" ", gap),
+		inspector,
+	)
+
 	footer := a.footer(w)
-	screen := lipgloss.JoinVertical(lipgloss.Left, header, modeBar, overview, mainRow, footer)
+
+	screen := lipgloss.JoinVertical(
+		lipgloss.Left,
+		header,
+		modeBar,
+		overview,
+		mainRow,
+		footer,
+	)
+
 	return rootFrame(a.width, a.height, screen)
 }
 
 func (a App) detailView() string {
 	w := a.contentWidth()
+
 	selected, ok := a.list.SelectedItem().(findingItem)
 	if !ok {
 		return rootFrame(a.width, a.height, panel("detail", "No finding selected.", w, a.height-4))
 	}
+
 	f := selected.Finding
+
 	body := strings.Join([]string{
 		detailHeader(f, w-6),
 		section("Problem", f.Message, w-6),
@@ -422,58 +506,108 @@ func (a App) detailView() string {
 		section("Recommended fix", f.Remediation, w-6),
 		muted("esc back • q quit"),
 	}, "\n\n")
-	screen := lipgloss.JoinVertical(lipgloss.Left, a.header(w), a.modeBar(w), panel("finding detail", body, w, a.height-6))
+
+	screen := lipgloss.JoinVertical(
+		lipgloss.Left,
+		a.header(w),
+		a.modeBar(w),
+		panel("finding detail", body, w, a.height-6),
+	)
+
 	return rootFrame(a.width, a.height, screen)
 }
 
 func (a App) header(w int) string {
 	left := styleBold(colorAccent).Render(" YOCTO LENS ")
 	right := muted("Yocto / BitBake metadata scanner")
+
 	used := lipgloss.Width(left) + lipgloss.Width(right)
 	spaces := w - used
 	if spaces < 1 {
 		spaces = 1
 	}
-	return lipgloss.NewStyle().Width(w).Background(colorBg0).Render(left + strings.Repeat(" ", spaces) + right)
+
+	return lipgloss.NewStyle().
+		Width(w).
+		Background(colorBg0).
+		Render(left + strings.Repeat(" ", spaces) + right)
 }
 
 func (a App) modeBar(w int) string {
 	staticCount := len(filterFindingsByMode(a.report.Findings, ModeStaticAnalysis))
 	styleCount := len(filterFindingsByMode(a.report.Findings, ModeStyleCheck))
-	modeLabel := lipgloss.NewStyle().Foreground(colorText).Background(colorBg3).Bold(true).Padding(0, 1).Render("Mode")
+
+	modeLabel := lipgloss.NewStyle().
+		Foreground(colorText).
+		Background(colorBg3).
+		Bold(true).
+		Padding(0, 1).
+		Render("Mode")
+
 	staticTab := modeTab(fmt.Sprintf("Static Analysis %d", staticCount), a.mode == ModeStaticAnalysis)
 	styleTab := modeTab(fmt.Sprintf("Style Check %d", styleCount), a.mode == ModeStyleCheck)
-	return lipgloss.NewStyle().Width(w).Background(colorBg0).Render(modeLabel + " " + staticTab + " " + styleTab)
+
+	return lipgloss.NewStyle().
+		Width(w).
+		Background(colorBg0).
+		Render(modeLabel + " " + staticTab + " " + styleTab)
 }
 
 func modeTab(name string, active bool) string {
 	if active {
-		return lipgloss.NewStyle().Foreground(colorBg0).Background(colorAccent).Bold(true).Padding(0, 2).Render(name)
+		return lipgloss.NewStyle().
+			Foreground(colorBg0).
+			Background(colorAccent).
+			Bold(true).
+			Padding(0, 2).
+			Render(name)
 	}
-	return lipgloss.NewStyle().Foreground(colorMuted).Background(colorBg3).Bold(true).Padding(0, 2).Render(name)
+
+	return lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Background(colorBg3).
+		Bold(true).
+		Padding(0, 2).
+		Render(name)
 }
 
 func (a App) overviewPanel(w int) string {
 	visible := a.visibleFindings()
 	high, medium, low := counts(visible)
 	score := riskScore(visible)
+	health := healthScore(visible)
+
 	gap := 1
 	cardCount := 6
 	cardWidth := (w - (gap * (cardCount - 1))) / cardCount
 	if cardWidth < 14 {
 		cardWidth = 14
 	}
+
 	cards := lipgloss.JoinHorizontal(
 		lipgloss.Top,
-		statCard("Layers", fmt.Sprintf("%d", len(a.report.Layers)), cardWidth), strings.Repeat(" ", gap),
-		statCard("Recipes", fmt.Sprintf("%d", len(a.report.Recipes)), cardWidth), strings.Repeat(" ", gap),
-		statCard("bbappends", fmt.Sprintf("%d", len(a.report.Appends)), cardWidth), strings.Repeat(" ", gap),
-		statCard("Patches", fmt.Sprintf("%d", len(a.report.Patches)), cardWidth), strings.Repeat(" ", gap),
-		statCard("Findings", fmt.Sprintf("%d", len(visible)), cardWidth), strings.Repeat(" ", gap),
+		statCard("Layers", fmt.Sprintf("%d", len(a.report.Layers)), cardWidth),
+		strings.Repeat(" ", gap),
+		statCard("Recipes", fmt.Sprintf("%d", len(a.report.Recipes)), cardWidth),
+		strings.Repeat(" ", gap),
+		statCard("bbappends", fmt.Sprintf("%d", len(a.report.Appends)), cardWidth),
+		strings.Repeat(" ", gap),
+		statCard("Patches", fmt.Sprintf("%d", len(a.report.Patches)), cardWidth),
+		strings.Repeat(" ", gap),
+		statCard("Findings", fmt.Sprintf("%d", len(visible)), cardWidth),
+		strings.Repeat(" ", gap),
 		statCard("Risk", riskLabel(score), cardWidth),
 	)
-	body := lipgloss.JoinVertical(lipgloss.Left, cards, "", issueMix(w-4, high, medium, low))
-	return panel("overview", body, w, 8)
+
+	body := lipgloss.JoinVertical(
+		lipgloss.Left,
+		cards,
+		"",
+		healthBar("Recipe Health", health, w-4),
+		issueMix(w-4, high, medium, low),
+	)
+
+	return panel("overview", body, w, 9)
 }
 
 func statCard(name string, value string, totalWidth int) string {
@@ -481,10 +615,30 @@ func statCard(name string, value string, totalWidth int) string {
 	if contentWidth < 8 {
 		contentWidth = 8
 	}
-	title := lipgloss.NewStyle().Foreground(colorMuted).Background(colorBg1).Bold(true).Render(name)
-	val := lipgloss.NewStyle().Foreground(colorAccent).Background(colorBg1).Bold(true).Render(value)
+
+	title := lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Background(colorBg1).
+		Bold(true).
+		Render(name)
+
+	val := lipgloss.NewStyle().
+		Foreground(colorAccent).
+		Background(colorBg1).
+		Bold(true).
+		Render(value)
+
 	body := title + "\n" + val
-	return lipgloss.NewStyle().Width(contentWidth).Height(2).Background(colorBg1).Foreground(colorText).Border(lipgloss.RoundedBorder()).BorderForeground(colorBorder).Padding(0, 1).Render(body)
+
+	return lipgloss.NewStyle().
+		Width(contentWidth).
+		Height(2).
+		Background(colorBg1).
+		Foreground(colorText).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorBorder).
+		Padding(0, 1).
+		Render(body)
 }
 
 func issueMix(width int, high int, medium int, low int) string {
@@ -492,22 +646,35 @@ func issueMix(width int, high int, medium int, low int) string {
 	if total == 0 {
 		return styleBold(colorGreen).Render("Issue Mix clean")
 	}
+
 	labelText := "Issue Mix "
 	labelStyled := styleBold(colorMuted).Render(labelText)
+
 	statsText := fmt.Sprintf("High %d Medium %d Low %d", high, medium, low)
-	statsStyled := severityColorText(model.SeverityHigh, fmt.Sprintf("High %d", high)) + muted(" ") + severityColorText(model.SeverityMedium, fmt.Sprintf("Medium %d", medium)) + muted(" ") + severityColorText(model.SeverityLow, fmt.Sprintf("Low %d", low))
+	statsStyled := severityColorText(model.SeverityHigh, fmt.Sprintf("High %d", high)) +
+		muted(" ") +
+		severityColorText(model.SeverityMedium, fmt.Sprintf("Medium %d", medium)) +
+		muted(" ") +
+		severityColorText(model.SeverityLow, fmt.Sprintf("Low %d", low))
+
 	barWidth := width - lipgloss.Width(labelText) - lipgloss.Width(statsText) - 6
 	if barWidth < 20 {
 		barWidth = 20
 	}
+
 	highCells := high * barWidth / total
 	mediumCells := medium * barWidth / total
 	lowCells := low * barWidth / total
+
 	used := highCells + mediumCells + lowCells
 	if used < barWidth {
 		highCells += barWidth - used
 	}
-	bar := lipgloss.NewStyle().Foreground(colorRed).Render(strings.Repeat("━", highCells)) + lipgloss.NewStyle().Foreground(colorYellow).Render(strings.Repeat("━", mediumCells)) + lipgloss.NewStyle().Foreground(colorGreen).Render(strings.Repeat("━", lowCells))
+
+	bar := lipgloss.NewStyle().Foreground(colorRed).Render(strings.Repeat("━", highCells)) +
+		lipgloss.NewStyle().Foreground(colorYellow).Render(strings.Repeat("━", mediumCells)) +
+		lipgloss.NewStyle().Foreground(colorGreen).Render(strings.Repeat("━", lowCells))
+
 	return labelStyled + bar + muted(" ") + statsStyled
 }
 
@@ -516,31 +683,48 @@ func (a App) previewText(width int, height int) string {
 	if !ok {
 		return muted("No finding selected.")
 	}
+
 	f := selected.Finding
+	recipeFindings := findingsForRecipe(a.visibleFindings(), f)
+	health := healthScore(recipeFindings)
+
 	lines := []string{
-		styleBold(colorText).Render(f.Title), "",
+		styleBold(colorText).Render(f.Title),
+		"",
+		healthBar("Recipe Health", health, width),
+		"",
 		label("Severity") + " " + severityText(f.Severity),
 		label("Rule") + " " + normal(emptyDash(f.RuleID)),
 		label("Layer") + " " + normal(emptyDash(f.Layer)),
 		label("File") + " " + normal(compactPath(f.File, width-12)),
-		label("Line") + " " + normal(fmt.Sprintf("%d", f.Line)), "",
-		styleBold(colorGreen).Render("Problem"), wrapText(emptyDash(f.Message), width), "",
-		styleBold(colorGreen).Render("Fix"), wrapText(emptyDash(f.Remediation), width), "",
+		label("Line") + " " + normal(fmt.Sprintf("%d", f.Line)),
+		"",
+		styleBold(colorGreen).Render("Problem"),
+		wrapText(emptyDash(f.Message), width),
+		"",
+		styleBold(colorGreen).Render("Fix"),
+		wrapText(emptyDash(f.Remediation), width),
+		"",
 		muted("Press / to fuzzy-search rule, severity, file, layer, or title."),
 		muted("Press enter for full detail."),
 	}
+
 	return trimHeight(strings.Join(lines, "\n"), height)
 }
 
 func detailHeader(f model.Finding, width int) string {
 	lines := []string{
-		styleBold(colorText).Render(f.Title), "",
+		styleBold(colorText).Render(f.Title),
+		"",
+		healthBar("Recipe Health", healthScore([]model.Finding{f}), width),
+		"",
 		label("Severity") + " " + severityText(f.Severity),
 		label("Rule") + " " + normal(emptyDash(f.RuleID)),
 		label("Layer") + " " + normal(emptyDash(f.Layer)),
 		label("File") + " " + normal(compactPath(f.File, width-12)),
 		label("Line") + " " + normal(fmt.Sprintf("%d", f.Line)),
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -552,13 +736,131 @@ func progressBar(width int, p model.ScanProgress) string {
 	if width < 20 {
 		width = 20
 	}
+
 	position := p.FilesProcessed % width
 	if position == 0 {
 		position = width / 2
 	}
+
 	left := strings.Repeat("━", position)
 	right := strings.Repeat("━", width-position)
-	return lipgloss.NewStyle().Foreground(colorAccent).Render(left) + lipgloss.NewStyle().Foreground(colorBorder).Render(right)
+
+	return lipgloss.NewStyle().Foreground(colorAccent).Render(left) +
+		lipgloss.NewStyle().Foreground(colorBorder).Render(right)
+}
+
+func healthScore(findings []model.Finding) int {
+	score := 100
+
+	for _, finding := range findings {
+		switch finding.Severity {
+		case model.SeverityCritical:
+			score -= 25
+		case model.SeverityHigh:
+			score -= 15
+		case model.SeverityMedium:
+			score -= 8
+		case model.SeverityLow:
+			score -= 3
+		default:
+			score -= 1
+		}
+	}
+
+	if score < 0 {
+		return 0
+	}
+	if score > 100 {
+		return 100
+	}
+
+	return score
+}
+
+func healthColor(score int) lipgloss.Color {
+	switch {
+	case score >= 80:
+		return colorGreen
+	case score >= 50:
+		return colorYellow
+	default:
+		return colorRed
+	}
+}
+
+func healthBar(labelText string, score int, width int) string {
+	if width < 30 {
+		width = 30
+	}
+
+	scoreText := fmt.Sprintf(" %3d/100", score)
+	labelStyled := styleBold(colorMuted).Render(labelText + " ")
+
+	barWidth := width - lipgloss.Width(labelText) - lipgloss.Width(scoreText) - 4
+	if barWidth < 10 {
+		barWidth = 10
+	}
+
+	filled := score * barWidth / 100
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > barWidth {
+		filled = barWidth
+	}
+
+	empty := barWidth - filled
+
+	barColor := healthColor(score)
+
+	bar := lipgloss.NewStyle().
+		Foreground(barColor).
+		Render(strings.Repeat("━", filled)) +
+		lipgloss.NewStyle().
+			Foreground(colorBg3).
+			Render(strings.Repeat("━", empty))
+
+	return labelStyled + bar + lipgloss.NewStyle().
+		Foreground(barColor).
+		Bold(true).
+		Render(scoreText)
+}
+
+func findingsForRecipe(findings []model.Finding, selected model.Finding) []model.Finding {
+	selectedFile := filepath.ToSlash(selected.File)
+	selectedRecipe := recipeNameFromPath(selectedFile)
+
+	matches := make([]model.Finding, 0)
+
+	for _, finding := range findings {
+		file := filepath.ToSlash(finding.File)
+		if file == selectedFile {
+			matches = append(matches, finding)
+			continue
+		}
+
+		if selectedRecipe != "" && recipeNameFromPath(file) == selectedRecipe {
+			matches = append(matches, finding)
+		}
+	}
+
+	if len(matches) == 0 {
+		return []model.Finding{selected}
+	}
+
+	return matches
+}
+
+func recipeNameFromPath(path string) string {
+	base := filepath.Base(filepath.ToSlash(path))
+	base = strings.TrimSuffix(base, ".bb")
+	base = strings.TrimSuffix(base, ".bbappend")
+
+	if idx := strings.LastIndex(base, "_"); idx > 0 {
+		return base[:idx]
+	}
+
+	return base
 }
 
 func panel(title string, body string, totalWidth int, totalHeight int) string {
@@ -568,17 +870,36 @@ func panel(title string, body string, totalWidth int, totalHeight int) string {
 	if totalHeight < 4 {
 		totalHeight = 4
 	}
+
 	contentWidth := totalWidth - 4
 	contentHeight := totalHeight - 3
+
 	if contentWidth < 10 {
 		contentWidth = 10
 	}
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
+
 	body = fitPanelBody(body, contentHeight)
-	titleLine := lipgloss.NewStyle().Width(totalWidth).Foreground(colorMuted).Background(colorBg0).Bold(true).Render(title)
-	box := lipgloss.NewStyle().Width(contentWidth).Height(contentHeight).Background(colorBg1).Foreground(colorText).Border(lipgloss.RoundedBorder()).BorderForeground(colorBorder).Padding(0, 1).Render(body)
+
+	titleLine := lipgloss.NewStyle().
+		Width(totalWidth).
+		Foreground(colorMuted).
+		Background(colorBg0).
+		Bold(true).
+		Render(title)
+
+	box := lipgloss.NewStyle().
+		Width(contentWidth).
+		Height(contentHeight).
+		Background(colorBg1).
+		Foreground(colorText).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorBorder).
+		Padding(0, 1).
+		Render(body)
+
 	return lipgloss.JoinVertical(lipgloss.Left, titleLine, box)
 }
 
@@ -587,9 +908,11 @@ func fitPanelBody(body string, height int) string {
 	if len(lines) > height {
 		lines = lines[:height]
 	}
+
 	for len(lines) < height {
 		lines = append(lines, "")
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -602,67 +925,108 @@ func trimHeight(body string, height int) string {
 }
 
 func listBox(view string, width int, height int) string {
-	return lipgloss.NewStyle().Width(width).Height(height).Background(colorBg1).Foreground(colorText).Render(view)
+	return lipgloss.NewStyle().
+		Width(width).
+		Height(height).
+		Background(colorBg1).
+		Foreground(colorText).
+		Render(view)
 }
 
 func (a App) pageIndicator(width int) string {
 	totalPages := a.list.Paginator.TotalPages
 	currentPage := a.list.Paginator.Page + 1
+
 	if totalPages <= 0 {
 		totalPages = 1
 	}
 	if currentPage <= 0 {
 		currentPage = 1
 	}
+
 	maxPagesToShow := 9
 	start := currentPage - 4
 	if start < 1 {
 		start = 1
 	}
+
 	end := start + maxPagesToShow - 1
 	if end > totalPages {
 		end = totalPages
 	}
+
 	if end-start+1 < maxPagesToShow {
 		start = end - maxPagesToShow + 1
 		if start < 1 {
 			start = 1
 		}
 	}
+
 	parts := []string{}
+
 	if start > 1 {
 		parts = append(parts, muted("1"))
 		if start > 2 {
 			parts = append(parts, muted("…"))
 		}
 	}
+
 	for i := start; i <= end; i++ {
 		page := fmt.Sprintf("%d", i)
 		if i == currentPage {
-			parts = append(parts, lipgloss.NewStyle().Foreground(colorBg0).Background(colorSelected).Bold(true).Padding(0, 1).Render(page))
+			parts = append(parts, lipgloss.NewStyle().
+				Foreground(colorBg0).
+				Background(colorSelected).
+				Bold(true).
+				Padding(0, 1).
+				Render(page))
 		} else {
 			parts = append(parts, muted(page))
 		}
 	}
+
 	if end < totalPages {
 		if end < totalPages-1 {
 			parts = append(parts, muted("…"))
 		}
 		parts = append(parts, muted(fmt.Sprintf("%d", totalPages)))
 	}
+
 	line := "Pages " + strings.Join(parts, " ")
-	return lipgloss.NewStyle().Width(width).Background(colorBg1).Align(lipgloss.Center).Render(muted(line))
+
+	return lipgloss.NewStyle().
+		Width(width).
+		Background(colorBg1).
+		Align(lipgloss.Center).
+		Render(muted(line))
 }
 
 func (a App) footer(w int) string {
 	parts := []string{
-		key("↑/k") + muted(" up"), key("↓/j") + muted(" down"), key("m/tab") + muted(" mode"), key("/") + muted(" fuzzy search"), key("enter") + muted(" details"), key("esc") + muted(" back"), key("q") + muted(" quit"),
+		key("↑/k") + muted(" up"),
+		key("↓/j") + muted(" down"),
+		key("m/tab") + muted(" mode"),
+		key("/") + muted(" fuzzy search"),
+		key("enter") + muted(" details"),
+		key("esc") + muted(" back"),
+		key("q") + muted(" quit"),
 	}
-	return lipgloss.NewStyle().Width(w).Background(colorBg0).Align(lipgloss.Center).Render(strings.Join(parts, muted(" • ")))
+
+	return lipgloss.NewStyle().
+		Width(w).
+		Background(colorBg0).
+		Align(lipgloss.Center).
+		Render(strings.Join(parts, muted(" • ")))
 }
 
 func rootFrame(width int, height int, content string) string {
-	return lipgloss.NewStyle().Width(width).Height(height).Background(colorBg0).Foreground(colorText).Padding(0, 1).Render(content)
+	return lipgloss.NewStyle().
+		Width(width).
+		Height(height).
+		Background(colorBg0).
+		Foreground(colorText).
+		Padding(0, 1).
+		Render(content)
 }
 
 func (a App) contentWidth() int {
@@ -675,25 +1039,34 @@ func (a App) contentWidth() int {
 
 func filterFindingsByMode(findings []model.Finding, mode AnalysisMode) []model.Finding {
 	filtered := make([]model.Finding, 0, len(findings))
+
 	for _, finding := range findings {
 		style := isStyleFinding(finding)
+
 		if mode == ModeStyleCheck && style {
 			filtered = append(filtered, finding)
 		}
+
 		if mode == ModeStaticAnalysis && !style {
 			filtered = append(filtered, finding)
 		}
 	}
+
 	return filtered
 }
 
 func isStyleFinding(f model.Finding) bool {
 	rule := strings.ToLower(f.RuleID)
-	return strings.HasPrefix(rule, "style/") || strings.HasPrefix(rule, "style-")
+
+	return strings.HasPrefix(rule, "style/") ||
+		strings.HasPrefix(rule, "style-")
 }
 
 func counts(findings []model.Finding) (int, int, int) {
-	var high, medium, low int
+	var high int
+	var medium int
+	var low int
+
 	for _, finding := range findings {
 		switch finding.Severity {
 		case model.SeverityCritical, model.SeverityHigh:
@@ -704,11 +1077,13 @@ func counts(findings []model.Finding) (int, int, int) {
 			low++
 		}
 	}
+
 	return high, medium, low
 }
 
 func riskScore(findings []model.Finding) int {
 	score := 0
+
 	for _, finding := range findings {
 		switch finding.Severity {
 		case model.SeverityCritical:
@@ -723,6 +1098,7 @@ func riskScore(findings []model.Finding) int {
 			score += 1
 		}
 	}
+
 	return score
 }
 
@@ -741,8 +1117,14 @@ func riskLabel(score int) string {
 	}
 }
 
-func severityText(sev model.Severity) string  { return severityColorText(sev, string(sev)) }
-func severityBadge(sev model.Severity) string { return severityColorText(sev, "["+string(sev)+"]") }
+func severityText(sev model.Severity) string {
+	return severityColorText(sev, string(sev))
+}
+
+func severityBadge(sev model.Severity) string {
+	return severityColorText(sev, "["+string(sev)+"]")
+}
+
 func severityColorText(sev model.Severity, text string) string {
 	return styleBold(severityColor(sev)).Render(text)
 }
@@ -766,10 +1148,12 @@ func compactPath(path string, max int) string {
 	if max < 12 {
 		max = 12
 	}
+
 	clean := filepath.ToSlash(path)
 	if lipgloss.Width(clean) <= max {
 		return clean
 	}
+
 	parts := strings.Split(clean, "/")
 	if len(parts) >= 3 {
 		tail := strings.Join(parts[len(parts)-3:], "/")
@@ -778,6 +1162,7 @@ func compactPath(path string, max int) string {
 			return out
 		}
 	}
+
 	return truncate("…"+clean, max)
 }
 
@@ -785,10 +1170,12 @@ func truncate(s string, max int) string {
 	if max <= 1 {
 		return "…"
 	}
+
 	runes := []rune(s)
 	if len(runes) <= max {
 		return s
 	}
+
 	return string(runes[:max-1]) + "…"
 }
 
@@ -796,29 +1183,36 @@ func wrapText(text string, width int) string {
 	if width < 20 {
 		width = 20
 	}
+
 	words := strings.Fields(text)
 	if len(words) == 0 {
 		return "-"
 	}
+
 	var lines []string
 	var current strings.Builder
+
 	for _, word := range words {
 		if current.Len() == 0 {
 			current.WriteString(word)
 			continue
 		}
+
 		if current.Len()+1+len(word) > width {
 			lines = append(lines, current.String())
 			current.Reset()
 			current.WriteString(word)
 			continue
 		}
+
 		current.WriteString(" ")
 		current.WriteString(word)
 	}
+
 	if current.Len() > 0 {
 		lines = append(lines, current.String())
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -830,16 +1224,32 @@ func emptyDash(s string) string {
 }
 
 func styleBold(color lipgloss.Color) lipgloss.Style {
-	return lipgloss.NewStyle().Bold(true).Foreground(color)
+	return lipgloss.NewStyle().
+		Bold(true).
+		Foreground(color)
 }
+
 func normal(s string) string {
-	return lipgloss.NewStyle().Foreground(colorText).Background(colorBg1).Render(s)
+	return lipgloss.NewStyle().
+		Foreground(colorText).
+		Background(colorBg1).
+		Render(s)
 }
+
 func muted(s string) string {
-	return lipgloss.NewStyle().Foreground(colorMuted).Background(colorBg1).Render(s)
+	return lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Background(colorBg1).
+		Render(s)
 }
-func label(s string) string { return styleBold(colorMuted).Render(s + ":") }
-func key(s string) string   { return styleBold(colorAccent).Render(s) }
+
+func label(s string) string {
+	return styleBold(colorMuted).Render(s + ":")
+}
+
+func key(s string) string {
+	return styleBold(colorAccent).Render(s)
+}
 
 var (
 	colorBg0 = lipgloss.Color("#282828")
