@@ -15,6 +15,9 @@ import (
 type ProgressFunc func(model.ScanProgress)
 
 var assignmentPattern = regexp.MustCompile(`^([A-Za-z0-9_:+${}./-]+)\s*(\?=|\+=|=|:=|\.=|=\+)\s*"(.*)"`)
+var looseAssignmentPattern = regexp.MustCompile(`^([A-Za-z0-9_:+${}./-]+)\s*(\?=|\+=|=|:=|\.=|=\+)\s*(.*)$`)
+var recipeNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]*(_[A-Za-z0-9.+~:-]+)?$`)
+var variableNamePattern = regexp.MustCompile(`^[A-Z0-9_:+${}./-]+$`)
 
 var skipDirs = map[string]bool{
 	".git":                 true,
@@ -61,20 +64,15 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 		Findings: []model.Finding{},
 	}
 
-	emit(progress, model.ScanProgress{
-		Phase:       model.PhaseStarting,
-		CurrentPath: report.Root,
-	})
+	emit(progress, model.ScanProgress{Phase: model.PhaseStarting, CurrentPath: report.Root})
 
 	layers, err := discoverLayers(paths, progress)
 	if err != nil {
 		return report, err
 	}
-
 	report.Layers = layers
 
 	filesProcessed := 0
-
 	for _, layer := range layers {
 		emit(progress, model.ScanProgress{
 			Phase:          model.PhaseParsing,
@@ -91,20 +89,17 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 			if walkErr != nil {
 				return nil
 			}
-
 			if d.IsDir() {
 				if shouldSkipDir(d.Name()) && path != layer.Path {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-
 			if !isInterestingFile(path) {
 				return nil
 			}
 
 			filesProcessed++
-
 			if filesProcessed%50 == 0 {
 				emit(progress, model.ScanProgress{
 					Phase:          model.PhaseParsing,
@@ -124,23 +119,19 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 				if parseErr == nil {
 					report.Recipes = append(report.Recipes, recipe)
 				}
-
 			case strings.HasSuffix(path, ".bbappend"):
 				appendFile, parseErr := parseAppend(path, layer)
 				if parseErr == nil {
 					report.Appends = append(report.Appends, appendFile)
 				}
-
 			case strings.HasSuffix(path, ".patch"):
 				patch, parseErr := parsePatch(path, layer)
 				if parseErr == nil {
 					report.Patches = append(report.Patches, patch)
 				}
 			}
-
 			return nil
 		})
-
 		if err != nil {
 			return report, err
 		}
@@ -158,8 +149,10 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 	})
 
 	report.Findings = runAllRules(report)
-
-	sort.Slice(report.Findings, func(i, j int) bool {
+	sort.SliceStable(report.Findings, func(i, j int) bool {
+		if severityRank(report.Findings[i].Severity) == severityRank(report.Findings[j].Severity) {
+			return report.Findings[i].RuleID < report.Findings[j].RuleID
+		}
 		return severityRank(report.Findings[i].Severity) > severityRank(report.Findings[j].Severity)
 	})
 
@@ -187,58 +180,37 @@ func discoverLayers(paths []string, progress ProgressFunc) ([]model.Layer, error
 		if err != nil {
 			return nil, err
 		}
-
 		info, err := os.Stat(root)
 		if err != nil {
 			return nil, err
 		}
-
 		if !info.IsDir() {
 			return nil, fmt.Errorf("%s is not a directory", root)
 		}
-
 		if isLayerDir(root) {
 			addLayer(&layers, seen, root)
 			continue
 		}
-
 		err = filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-			if walkErr != nil {
+			if walkErr != nil || !d.IsDir() {
 				return nil
 			}
-
-			if !d.IsDir() {
-				return nil
-			}
-
 			if shouldSkipDir(d.Name()) && path != root {
 				return filepath.SkipDir
 			}
-
 			if isLayerDir(path) {
 				addLayer(&layers, seen, path)
-
-				emit(progress, model.ScanProgress{
-					Phase:       model.PhaseDiscovering,
-					CurrentPath: path,
-					LayersFound: len(layers),
-				})
-
+				emit(progress, model.ScanProgress{Phase: model.PhaseDiscovering, CurrentPath: path, LayersFound: len(layers)})
 				return filepath.SkipDir
 			}
-
 			return nil
 		})
-
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	sort.Slice(layers, func(i, j int) bool {
-		return layers[i].Path < layers[j].Path
-	})
-
+	sort.Slice(layers, func(i, j int) bool { return layers[i].Path < layers[j].Path })
 	return layers, nil
 }
 
@@ -247,13 +219,8 @@ func addLayer(layers *[]model.Layer, seen map[string]bool, path string) {
 	if seen[clean] {
 		return
 	}
-
 	seen[clean] = true
-
-	*layers = append(*layers, model.Layer{
-		Path: clean,
-		Name: filepath.Base(clean),
-	})
+	*layers = append(*layers, model.Layer{Path: clean, Name: filepath.Base(clean)})
 }
 
 func isLayerDir(path string) bool {
@@ -261,14 +228,10 @@ func isLayerDir(path string) bool {
 	return err == nil
 }
 
-func shouldSkipDir(name string) bool {
-	return skipDirs[name]
-}
+func shouldSkipDir(name string) bool { return skipDirs[name] }
 
 func isInterestingFile(path string) bool {
-	return strings.HasSuffix(path, ".bb") ||
-		strings.HasSuffix(path, ".bbappend") ||
-		strings.HasSuffix(path, ".patch")
+	return strings.HasSuffix(path, ".bb") || strings.HasSuffix(path, ".bbappend") || strings.HasSuffix(path, ".patch")
 }
 
 func parseRecipe(path string, layer model.Layer) (model.Recipe, error) {
@@ -279,29 +242,18 @@ func parseRecipe(path string, layer model.Layer) (model.Recipe, error) {
 
 	name := strings.TrimSuffix(filepath.Base(path), ".bb")
 	pn := recipePNFromName(name)
-
 	pv := ""
 	if idx := strings.Index(name, "_"); idx >= 0 && idx+1 < len(name) {
 		pv = name[idx+1:]
 	}
-
 	if v, ok := vars["PN"]; ok && strings.TrimSpace(v) != "" {
 		pn = v
 	}
-
 	if v, ok := vars["PV"]; ok && strings.TrimSpace(v) != "" {
 		pv = v
 	}
 
-	return model.Recipe{
-		Path:      path,
-		Layer:     layer.Name,
-		Name:      name,
-		PN:        pn,
-		PV:        pv,
-		Variables: vars,
-		Lines:     lines,
-	}, nil
+	return model.Recipe{Path: path, Layer: layer.Name, Name: name, PN: pn, PV: pv, Variables: vars, Lines: lines}, nil
 }
 
 func parseAppend(path string, layer model.Layer) (model.Append, error) {
@@ -309,17 +261,8 @@ func parseAppend(path string, layer model.Layer) (model.Append, error) {
 	if err != nil {
 		return model.Append{}, err
 	}
-
 	name := strings.TrimSuffix(filepath.Base(path), ".bbappend")
-
-	return model.Append{
-		Path:      path,
-		Layer:     layer.Name,
-		Name:      name,
-		Target:    name,
-		Variables: vars,
-		Lines:     lines,
-	}, nil
+	return model.Append{Path: path, Layer: layer.Name, Name: name, Target: name, Variables: vars, Lines: lines}, nil
 }
 
 func parsePatch(path string, layer model.Layer) (model.Patch, error) {
@@ -327,12 +270,7 @@ func parsePatch(path string, layer model.Layer) (model.Patch, error) {
 	if err != nil {
 		return model.Patch{}, err
 	}
-
-	return model.Patch{
-		Path:  path,
-		Layer: layer.Name,
-		Lines: lines,
-	}, nil
+	return model.Patch{Path: path, Layer: layer.Name, Lines: lines}, nil
 }
 
 func parseMetadataFile(path string) ([]string, map[string]string, error) {
@@ -344,356 +282,274 @@ func parseMetadataFile(path string) ([]string, map[string]string, error) {
 
 	lines := []string{}
 	vars := map[string]string{}
-
 	scanner := bufio.NewScanner(file)
-
 	for scanner.Scan() {
 		line := scanner.Text()
 		lines = append(lines, line)
-
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-
 		matches := assignmentPattern.FindStringSubmatch(trimmed)
 		if len(matches) == 4 {
 			key := normalizeVar(matches[1])
 			vars[key] = matches[3]
 		}
 	}
-
 	return lines, vars, scanner.Err()
 }
 
 func normalizeVar(v string) string {
-	replacers := []string{
-		":append", "",
-		":prepend", "",
-		":remove", "",
-		"_append", "",
-		"_prepend", "",
-		"_remove", "",
-	}
-
+	replacers := []string{":append", "", ":prepend", "", ":remove", "", "_append", "", "_prepend", "", "_remove", ""}
 	r := strings.NewReplacer(replacers...)
 	v = r.Replace(v)
-
 	if idx := strings.Index(v, ":"); idx >= 0 {
 		v = v[:idx]
 	}
-
 	return v
 }
 
 func runAllRules(report model.Report) []model.Finding {
 	var findings []model.Finding
 
+	for _, layer := range report.Layers {
+		findings = append(findings, checkLayerBasics(layer)...)
+	}
 	for _, recipe := range report.Recipes {
-		findings = append(findings, checkRecipeBasics(recipe)...)
-		findings = append(findings, checkLines(recipe.Path, recipe.Layer, recipe.Lines)...)
+		findings = append(findings, checkRecipeStatic(recipe)...)
+		findings = append(findings, checkRecipeStyle(recipe)...)
+		findings = append(findings, checkLinesStatic(recipe.Path, recipe.Layer, recipe.Lines)...)
+		findings = append(findings, checkLinesStyle(recipe.Path, recipe.Layer, recipe.Lines)...)
 	}
-
 	for _, appendFile := range report.Appends {
-		findings = append(findings, checkAppendBasics(appendFile, report.Recipes)...)
-		findings = append(findings, checkLines(appendFile.Path, appendFile.Layer, appendFile.Lines)...)
+		findings = append(findings, checkAppendStatic(appendFile, report.Recipes)...)
+		findings = append(findings, checkAppendStyle(appendFile)...)
+		findings = append(findings, checkLinesStatic(appendFile.Path, appendFile.Layer, appendFile.Lines)...)
+		findings = append(findings, checkLinesStyle(appendFile.Path, appendFile.Layer, appendFile.Lines)...)
 	}
-
 	for _, patch := range report.Patches {
-		findings = append(findings, checkPatchMetadata(patch)...)
+		findings = append(findings, checkPatchStatic(patch)...)
+		findings = append(findings, checkPatchStyle(patch)...)
 	}
-
 	findings = append(findings, checkDuplicateRecipes(report.Recipes)...)
 
 	return findings
 }
 
-func checkRecipeBasics(recipe model.Recipe) []model.Finding {
+func checkLayerBasics(layer model.Layer) []model.Finding {
+	var findings []model.Finding
+	conf := filepath.Join(layer.Path, "conf", "layer.conf")
+	lines, vars, err := parseMetadataFile(conf)
+	if err != nil {
+		return findings
+	}
+	if !hasVar(vars, "LAYERSERIES_COMPAT") {
+		findings = append(findings, finding("static/layer-missing-series-compat", "Layer missing LAYERSERIES_COMPAT", model.SeverityMedium, layer.Name, conf, 1, "Layer does not declare LAYERSERIES_COMPAT.", "Layer compatibility should be explicit so CI and integrators know which Yocto releases are supported.", "Add LAYERSERIES_COMPAT for this layer in conf/layer.conf."))
+	}
+	if !hasVar(vars, "BBFILE_COLLECTIONS") {
+		findings = append(findings, finding("static/layer-missing-bbfile-collections", "Layer missing BBFILE_COLLECTIONS", model.SeverityMedium, layer.Name, conf, 1, "Layer does not declare BBFILE_COLLECTIONS.", "A layer without BBFILE_COLLECTIONS can be misconfigured or hard to integrate cleanly.", "Add BBFILE_COLLECTIONS and matching BBFILE_PATTERN / BBFILE_PRIORITY entries."))
+	}
+	findings = append(findings, checkLinesStatic(conf, layer.Name, lines)...)
+	findings = append(findings, checkLinesStyle(conf, layer.Name, lines)...)
+	return findings
+}
+
+func checkRecipeStatic(recipe model.Recipe) []model.Finding {
 	var findings []model.Finding
 
-	if !hasVar(recipe.Variables, "LICENSE") {
-		findings = append(findings, finding(
-			"missing-license",
-			"Missing LICENSE",
-			model.SeverityHigh,
-			recipe.Layer,
-			recipe.Path,
-			1,
-			"Recipe does not define LICENSE.",
-			"Yocto recipes must clearly declare licensing so generated images and license manifests are auditable.",
-			"Add a valid LICENSE value, for example LICENSE = \"MIT\".",
-		))
+	if srcRev, ok := recipe.Variables["SRCREV"]; ok && (strings.Contains(srcRev, "AUTOREV") || isFloatingRevision(srcRev)) {
+		findings = append(findings, finding("static/floating-srcrev", "Floating SRCREV", model.SeverityHigh, recipe.Layer, recipe.Path, findLine(recipe.Lines, "SRCREV"), "Recipe uses AUTOREV or a floating source revision.", "Floating source revisions break reproducible builds because the same metadata can fetch different source code later.", "Pin SRCREV to a fixed commit hash."))
 	}
-
-	if !hasVar(recipe.Variables, "LIC_FILES_CHKSUM") {
-		findings = append(findings, finding(
-			"missing-lic-files-chksum",
-			"Missing LIC_FILES_CHKSUM",
-			model.SeverityHigh,
-			recipe.Layer,
-			recipe.Path,
-			1,
-			"Recipe does not define LIC_FILES_CHKSUM.",
-			"Yocto uses license file checksums to detect upstream license changes during builds.",
-			"Add LIC_FILES_CHKSUM pointing to the upstream license file.",
-		))
-	}
-
-	if !hasVar(recipe.Variables, "SUMMARY") {
-		findings = append(findings, finding(
-			"missing-summary",
-			"Missing SUMMARY",
-			model.SeverityLow,
-			recipe.Layer,
-			recipe.Path,
-			1,
-			"Recipe does not define SUMMARY.",
-			"Good recipe metadata improves maintainability, package review, and generated package information.",
-			"Add a short SUMMARY describing the package.",
-		))
-	}
-
-	if srcRev, ok := recipe.Variables["SRCREV"]; ok && strings.Contains(srcRev, "AUTOREV") {
-		findings = append(findings, finding(
-			"floating-srcrev",
-			"Floating SRCREV",
-			model.SeverityHigh,
-			recipe.Layer,
-			recipe.Path,
-			findLine(recipe.Lines, "SRCREV"),
-			"Recipe uses AUTOREV or a floating source revision.",
-			"Floating source revisions break reproducible builds because the same metadata can fetch different source code later.",
-			"Pin SRCREV to a fixed commit hash.",
-		))
-	}
-
 	if srcURI, ok := recipe.Variables["SRC_URI"]; ok && strings.Contains(srcURI, "http://") {
-		findings = append(findings, finding(
-			"insecure-src-uri",
-			"Insecure SRC_URI",
-			model.SeverityMedium,
-			recipe.Layer,
-			recipe.Path,
-			findLine(recipe.Lines, "SRC_URI"),
-			"SRC_URI contains an http:// URL.",
-			"Insecure fetch URLs can be intercepted or modified and may fail security review.",
-			"Use https:// where supported.",
-		))
+		findings = append(findings, finding("static/insecure-src-uri", "Insecure SRC_URI", model.SeverityMedium, recipe.Layer, recipe.Path, findLine(recipe.Lines, "SRC_URI"), "SRC_URI contains an http:// URL.", "Insecure fetch URLs can be intercepted or modified and may fail security review.", "Use https:// where supported."))
 	}
-
+	if srcURI, ok := recipe.Variables["SRC_URI"]; ok && containsBranchFloatingToken(srcURI) {
+		findings = append(findings, finding("static/floating-source-branch", "Floating source branch", model.SeverityMedium, recipe.Layer, recipe.Path, findLine(recipe.Lines, "SRC_URI"), "SRC_URI points at a moving branch or HEAD-like source.", "Moving branches make rebuilds non-reproducible and can pull unreviewed code.", "Pin a fixed SRCREV and avoid branch names such as master/main without an immutable revision."))
+	}
 	return findings
 }
 
-func checkAppendBasics(appendFile model.Append, recipes []model.Recipe) []model.Finding {
+func checkRecipeStyle(recipe model.Recipe) []model.Finding {
 	var findings []model.Finding
 
-	if strings.Contains(appendFile.Target, "%") {
-		findings = append(findings, finding(
-			"wildcard-bbappend",
-			"Wildcard bbappend",
-			model.SeverityLow,
-			appendFile.Layer,
-			appendFile.Path,
-			1,
-			"This .bbappend uses a wildcard target.",
-			"Wildcard appends are sometimes correct, but they can silently affect newer recipe versions.",
-			"Confirm the wildcard is intentional and documented.",
-		))
+	if !recipeNamePattern.MatchString(recipe.Name) {
+		findings = append(findings, finding("style/recipe-name", "Recipe name style", model.SeverityLow, recipe.Layer, recipe.Path, 1, "Recipe filename does not follow common lower-case Yocto naming style.", "Consistent recipe names make layer review and maintenance easier.", "Use lower-case package names and a _version suffix when the recipe is versioned."))
 	}
+	if strings.Contains(recipe.Name, "_") && recipe.PV == "" {
+		findings = append(findings, finding("style/recipe-version", "Recipe version not clear", model.SeverityLow, recipe.Layer, recipe.Path, 1, "Recipe filename contains an underscore but no version could be parsed.", "Clear recipe versioning makes upgrades and bbappend matching easier to review.", "Use name_version.bb, or set PV explicitly when using a special version scheme."))
+	}
+	if !hasVar(recipe.Variables, "SUMMARY") {
+		findings = append(findings, finding("style/missing-summary", "Missing SUMMARY", model.SeverityLow, recipe.Layer, recipe.Path, 1, "Recipe does not define SUMMARY.", "Good recipe metadata improves maintainability, package review, and generated package information.", "Add a short SUMMARY describing the package."))
+	}
+	if !hasVar(recipe.Variables, "DESCRIPTION") {
+		findings = append(findings, finding("style/missing-description", "Missing DESCRIPTION", model.SeverityInfo, recipe.Layer, recipe.Path, 1, "Recipe does not define DESCRIPTION.", "DESCRIPTION helps reviewers understand what the recipe provides beyond the short summary.", "Add DESCRIPTION when the package purpose is not obvious from SUMMARY."))
+	}
+	if !hasVar(recipe.Variables, "LICENSE") {
+		findings = append(findings, finding("style/missing-license", "Missing LICENSE", model.SeverityMedium, recipe.Layer, recipe.Path, 1, "Recipe does not define LICENSE.", "Clear license metadata is required for review hygiene and generated license manifests.", "Add a valid LICENSE value, for example LICENSE = \"MIT\"."))
+	}
+	if !hasVar(recipe.Variables, "LIC_FILES_CHKSUM") {
+		findings = append(findings, finding("style/missing-lic-files-chksum", "Missing LIC_FILES_CHKSUM", model.SeverityMedium, recipe.Layer, recipe.Path, 1, "Recipe does not define LIC_FILES_CHKSUM.", "Yocto uses license file checksums to detect upstream license changes during builds.", "Add LIC_FILES_CHKSUM pointing to the upstream license file."))
+	}
+	if hasVar(recipe.Variables, "LICENSE") && strings.EqualFold(strings.TrimSpace(recipe.Variables["LICENSE"]), "CLOSED") {
+		findings = append(findings, finding("style/closed-license", "CLOSED license needs review", model.SeverityLow, recipe.Layer, recipe.Path, findLine(recipe.Lines, "LICENSE"), "Recipe uses LICENSE = \"CLOSED\".", "CLOSED may be valid for proprietary components, but it should be intentional and documented.", "Confirm this component is proprietary and add comments explaining the choice if needed."))
+	}
+	findings = append(findings, checkVariableOrder(recipe.Path, recipe.Layer, recipe.Lines)...)
+	return findings
+}
 
+func checkAppendStatic(appendFile model.Append, recipes []model.Recipe) []model.Finding {
+	var findings []model.Finding
 	if !appendMatchesAnyRecipe(appendFile, recipes) {
-		findings = append(findings, finding(
-			"orphan-bbappend",
-			"Possibly orphaned bbappend",
-			model.SeverityHigh,
-			appendFile.Layer,
-			appendFile.Path,
-			1,
-			"This .bbappend does not match any recipe discovered in the scanned layers.",
-			"Orphan appends are ignored by BitBake or cause layer compatibility problems depending on configuration.",
-			"Check recipe name/version, BBFILES patterns, layer dependencies, and whether the target recipe exists.",
-		))
+		findings = append(findings, finding("static/orphan-bbappend", "Possibly orphaned bbappend", model.SeverityHigh, appendFile.Layer, appendFile.Path, 1, "This .bbappend does not match any recipe discovered in the scanned layers.", "Orphan appends are ignored by BitBake or cause layer compatibility problems depending on configuration.", "Check recipe name/version, BBFILES patterns, layer dependencies, and whether the target recipe exists."))
 	}
-
 	if modifiesRiskyVariables(appendFile.Lines) {
-		findings = append(findings, finding(
-			"bbappend-modifies-source-or-install",
-			"bbappend modifies source/install behavior",
-			model.SeverityMedium,
-			appendFile.Layer,
-			appendFile.Path,
-			1,
-			"This .bbappend changes source, install, systemd, or file search behavior.",
-			"Appends that alter SRC_URI, FILESEXTRAPATHS, do_install, or systemd units can significantly change product behavior.",
-			"Review the append carefully and document why the modification is required.",
-		))
+		findings = append(findings, finding("static/bbappend-modifies-source-or-install", "bbappend modifies source/install behavior", model.SeverityMedium, appendFile.Layer, appendFile.Path, 1, "This .bbappend changes source, install, systemd, or file search behavior.", "Appends that alter SRC_URI, FILESEXTRAPATHS, do_install, or systemd units can significantly change product behavior.", "Review the append carefully and document why the modification is required."))
 	}
-
 	return findings
 }
 
-func checkLines(path string, layer string, lines []string) []model.Finding {
+func checkAppendStyle(appendFile model.Append) []model.Finding {
 	var findings []model.Finding
-
-	secretPatterns := []string{
-		"password",
-		"passwd",
-		"token",
-		"apikey",
-		"api_key",
-		"secret",
-		"private_key",
-		"begin rsa private key",
-		"begin openssh private key",
+	if strings.Contains(appendFile.Target, "%") {
+		findings = append(findings, finding("style/wildcard-bbappend", "Wildcard bbappend", model.SeverityLow, appendFile.Layer, appendFile.Path, 1, "This .bbappend uses a wildcard target.", "Wildcard appends can be correct, but they can silently affect newer recipe versions.", "Confirm the wildcard is intentional and document why it is safe."))
 	}
-
-	hostPaths := []string{
-		"/home/",
-		"/users/",
-		"/mnt/c/",
-		"/tmp/",
-		"/var/tmp/",
+	if !strings.Contains(appendFile.Target, "_") && !strings.Contains(appendFile.Target, "%") {
+		findings = append(findings, finding("style/broad-bbappend", "Broad bbappend target", model.SeverityLow, appendFile.Layer, appendFile.Path, 1, "This .bbappend targets a recipe without a version suffix.", "Broad appends can unexpectedly apply to future versions of a recipe.", "Use a versioned .bbappend when the change is version-specific, or document why it is intentionally broad."))
 	}
+	return findings
+}
+
+func checkLinesStatic(path string, layer string, lines []string) []model.Finding {
+	var findings []model.Finding
+	secretPatterns := []string{"password", "passwd", "token", "apikey", "api_key", "secret", "private_key", "begin rsa private key", "begin openssh private key"}
+	hostPaths := []string{"/home/", "/users/", "/mnt/c/", "/tmp/", "/var/tmp/"}
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		lower := strings.ToLower(line)
-
-		if strings.HasPrefix(trimmed, "#") {
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-
-		if strings.Contains(line, "_append") || strings.Contains(line, "_prepend") || strings.Contains(line, "_remove") {
-			findings = append(findings, finding(
-				"old-override-syntax",
-				"Old override syntax",
-				model.SeverityMedium,
-				layer,
-				path,
-				i+1,
-				"Metadata appears to use old underscore override syntax.",
-				"Modern Yocto releases use colon override syntax. Old syntax can break or behave differently depending on release.",
-				"Use VAR:append, VAR:prepend, or VAR:remove syntax.",
-			))
-		}
-
 		if strings.Contains(line, "AUTOREV") {
-			findings = append(findings, finding(
-				"autorev-used",
-				"AUTOREV used",
-				model.SeverityHigh,
-				layer,
-				path,
-				i+1,
-				"Metadata uses AUTOREV.",
-				"AUTOREV makes builds non-reproducible and can pull unreviewed upstream changes.",
-				"Pin revisions to a commit hash.",
-			))
+			findings = append(findings, finding("static/autorev-used", "AUTOREV used", model.SeverityHigh, layer, path, i+1, "Metadata uses AUTOREV.", "AUTOREV makes builds non-reproducible and can pull unreviewed upstream changes.", "Pin revisions to a commit hash."))
 		}
-
 		for _, p := range hostPaths {
 			if strings.Contains(lower, p) {
-				findings = append(findings, finding(
-					"host-absolute-path",
-					"Host-specific absolute path",
-					model.SeverityMedium,
-					layer,
-					path,
-					i+1,
-					"Metadata contains a host-specific absolute path.",
-					"Host paths break reproducibility and fail on other developers' machines or CI workers.",
-					"Use ${WORKDIR}, ${THISDIR}, ${S}, ${B}, ${D}, or FILESEXTRAPATHS.",
-				))
+				findings = append(findings, finding("static/host-absolute-path", "Host-specific absolute path", model.SeverityMedium, layer, path, i+1, "Metadata contains a host-specific absolute path.", "Host paths break reproducibility and fail on other developers' machines or CI workers.", "Use ${WORKDIR}, ${THISDIR}, ${S}, ${B}, ${D}, or FILESEXTRAPATHS."))
 				break
 			}
 		}
-
 		for _, pattern := range secretPatterns {
 			if strings.Contains(lower, pattern) && strings.Contains(line, "=") {
-				findings = append(findings, finding(
-					"possible-hardcoded-secret",
-					"Possible hardcoded secret",
-					model.SeverityHigh,
-					layer,
-					path,
-					i+1,
-					"This line appears to contain a password, token, key, or secret.",
-					"Secrets in Yocto metadata can leak into source control, build logs, images, or deployed devices.",
-					"Move secrets to CI secrets, runtime provisioning, secure storage, or device-specific provisioning.",
-				))
+				findings = append(findings, finding("static/possible-hardcoded-secret", "Possible hardcoded secret", model.SeverityHigh, layer, path, i+1, "This line appears to contain a password, token, key, or secret.", "Secrets in Yocto metadata can leak into source control, build logs, images, or deployed devices.", "Move secrets to CI secrets, runtime provisioning, secure storage, or device-specific provisioning."))
 				break
 			}
 		}
 	}
-
 	return findings
 }
 
-func checkPatchMetadata(patch model.Patch) []model.Finding {
+func checkLinesStyle(path string, layer string, lines []string) []model.Finding {
 	var findings []model.Finding
-
-	content := strings.Join(patch.Lines, "\n")
-
-	if !strings.Contains(content, "Upstream-Status:") {
-		findings = append(findings, finding(
-			"patch-missing-upstream-status",
-			"Patch missing Upstream-Status",
-			model.SeverityMedium,
-			patch.Layer,
-			patch.Path,
-			1,
-			"Patch does not contain Upstream-Status.",
-			"Yocto patch review expects clear upstreaming state so patches do not become unmaintained technical debt.",
-			"Add Upstream-Status with a value such as Pending, Submitted, Backport, Inappropriate, or Denied.",
-		))
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasSuffix(line, " ") || strings.HasSuffix(line, "\t") {
+			findings = append(findings, finding("style/trailing-whitespace", "Trailing whitespace", model.SeverityInfo, layer, path, i+1, "Line contains trailing whitespace.", "Trailing whitespace creates noisy diffs and review churn.", "Remove trailing whitespace."))
+		}
+		if strings.Contains(line, "_append") || strings.Contains(line, "_prepend") || strings.Contains(line, "_remove") {
+			findings = append(findings, finding("style/old-override-syntax", "Old override syntax", model.SeverityMedium, layer, path, i+1, "Metadata appears to use old underscore override syntax.", "Modern Yocto releases use colon override syntax. Old syntax can break or behave differently depending on release.", "Use VAR:append, VAR:prepend, or VAR:remove syntax."))
+		}
+		if len(line) > 120 {
+			findings = append(findings, finding("style/line-length", "Long metadata line", model.SeverityInfo, layer, path, i+1, "Line is longer than 120 characters.", "Very long metadata lines are harder to review and maintain.", "Split long values across multiple lines with continuation where appropriate."))
+		}
+		if matches := looseAssignmentPattern.FindStringSubmatch(trimmed); len(matches) == 4 {
+			varName, op, rawValue := matches[1], matches[2], strings.TrimSpace(matches[3])
+			if !variableNamePattern.MatchString(varName) {
+				findings = append(findings, finding("style/variable-name", "Variable name style", model.SeverityLow, layer, path, i+1, "Variable name is not in the usual upper-case BitBake style.", "Consistent variable naming makes metadata easier to scan and review.", "Use upper-case variable names unless this is a valid function or task name."))
+			}
+			want := varName + " " + op + " "
+			if !strings.HasPrefix(trimmed, want) {
+				findings = append(findings, finding("style/assignment-spacing", "Assignment spacing", model.SeverityInfo, layer, path, i+1, "Assignment spacing is not normalized.", "Consistent spacing makes metadata easier to read and review.", "Use the form VAR "+op+" \"value\"."))
+			}
+			if rawValue != "" && !strings.HasPrefix(rawValue, "\"") && !strings.HasPrefix(rawValue, "'") && !strings.HasPrefix(rawValue, "${") {
+				findings = append(findings, finding("style/unquoted-assignment", "Unquoted assignment", model.SeverityInfo, layer, path, i+1, "Assignment value is not quoted.", "Quoted assignment values are easier to parse consistently and avoid accidental whitespace issues.", "Use quotes for metadata values unless BitBake syntax specifically requires otherwise."))
+			}
+		}
 	}
+	return findings
+}
 
+func checkPatchStatic(patch model.Patch) []model.Finding {
+	var findings []model.Finding
+	content := strings.Join(patch.Lines, "\n")
 	upperName := strings.ToUpper(filepath.Base(patch.Path))
 	if strings.Contains(upperName, "CVE") && !strings.Contains(content, "CVE-") {
-		findings = append(findings, finding(
-			"patch-cve-metadata-missing",
-			"CVE patch missing CVE metadata",
-			model.SeverityMedium,
-			patch.Layer,
-			patch.Path,
-			1,
-			"Patch filename suggests CVE content but patch body does not contain a CVE identifier.",
-			"Security patches should be traceable for audit, maintenance, and vulnerability management.",
-			"Add the CVE identifier and security context in the patch header.",
-		))
+		findings = append(findings, finding("static/patch-cve-metadata-missing", "CVE patch missing CVE metadata", model.SeverityMedium, patch.Layer, patch.Path, 1, "Patch filename suggests CVE content but patch body does not contain a CVE identifier.", "Security patches should be traceable for audit, maintenance, and vulnerability management.", "Add the CVE identifier and security context in the patch header."))
+	}
+	return findings
+}
+
+func checkPatchStyle(patch model.Patch) []model.Finding {
+	var findings []model.Finding
+	content := strings.Join(patch.Lines, "\n")
+	if !strings.Contains(content, "Upstream-Status:") {
+		findings = append(findings, finding("style/patch-missing-upstream-status", "Patch missing Upstream-Status", model.SeverityMedium, patch.Layer, patch.Path, 1, "Patch does not contain Upstream-Status.", "Yocto patch review expects clear upstreaming state so patches do not become unmaintained technical debt.", "Add Upstream-Status with a value such as Pending, Submitted, Backport, Inappropriate, or Denied."))
+	}
+	if !strings.Contains(content, "Signed-off-by:") {
+		findings = append(findings, finding("style/patch-missing-signed-off-by", "Patch missing Signed-off-by", model.SeverityLow, patch.Layer, patch.Path, 1, "Patch does not contain a Signed-off-by trailer.", "Signed-off-by improves patch provenance and review hygiene.", "Add a Signed-off-by line to the patch trailer when appropriate for your project."))
+	}
+	return findings
+}
+
+func checkVariableOrder(path string, layer string, lines []string) []model.Finding {
+	order := []string{"SUMMARY", "DESCRIPTION", "HOMEPAGE", "LICENSE", "LIC_FILES_CHKSUM", "SRC_URI", "SRCREV", "S", "DEPENDS", "RDEPENDS"}
+	position := map[string]int{}
+	for i, key := range order {
+		position[key] = i
 	}
 
-	return findings
+	lastPos := -1
+	lastVar := ""
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		matches := looseAssignmentPattern.FindStringSubmatch(trimmed)
+		if len(matches) != 4 {
+			continue
+		}
+		key := normalizeVar(matches[1])
+		pos, ok := position[key]
+		if !ok {
+			continue
+		}
+		if pos < lastPos {
+			return []model.Finding{finding("style/variable-order", "Variable order", model.SeverityLow, layer, path, i+1, fmt.Sprintf("%s appears after %s, which is not the usual recipe metadata order.", key, lastVar), "Consistent variable order makes recipes easier to review and compare.", "Prefer ordering common metadata as SUMMARY, DESCRIPTION, HOMEPAGE, LICENSE, LIC_FILES_CHKSUM, SRC_URI, SRCREV, S, DEPENDS, RDEPENDS.")}
+		}
+		lastPos = pos
+		lastVar = key
+	}
+	return nil
 }
 
 func checkDuplicateRecipes(recipes []model.Recipe) []model.Finding {
 	var findings []model.Finding
 	byName := map[string][]model.Recipe{}
-
 	for _, recipe := range recipes {
 		byName[recipe.Name] = append(byName[recipe.Name], recipe)
 	}
-
 	for name, matches := range byName {
 		if len(matches) < 2 {
 			continue
 		}
-
 		for _, recipe := range matches {
-			findings = append(findings, finding(
-				"duplicate-recipe",
-				"Duplicate recipe name",
-				model.SeverityMedium,
-				recipe.Layer,
-				recipe.Path,
-				1,
-				fmt.Sprintf("Recipe %s appears in multiple scanned layers.", name),
-				"Duplicate recipe names can cause priority-dependent behavior and unexpected provider selection.",
-				"Check layer priorities, recipe versions, and whether the duplicate is intentional.",
-			))
+			findings = append(findings, finding("static/duplicate-recipe", "Duplicate recipe name", model.SeverityMedium, recipe.Layer, recipe.Path, 1, fmt.Sprintf("Recipe %s appears in multiple scanned layers.", name), "Duplicate recipe names can cause priority-dependent behavior and unexpected provider selection.", "Check layer priorities, recipe versions, and whether the duplicate is intentional."))
 		}
 	}
-
 	return findings
 }
 
@@ -708,7 +564,6 @@ func appendMatchesAnyRecipe(appendFile model.Append, recipes []model.Recipe) boo
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -716,15 +571,12 @@ func appendMatchesRecipe(appendTarget string, recipeName string) bool {
 	if appendTarget == recipeName {
 		return true
 	}
-
 	if strings.Contains(appendTarget, "%") {
 		prefix := strings.Split(appendTarget, "%")[0]
 		return strings.HasPrefix(recipeName, prefix)
 	}
-
 	appendPN := recipePNFromName(appendTarget)
 	recipePN := recipePNFromName(recipeName)
-
 	return appendPN == recipePN
 }
 
@@ -732,23 +584,11 @@ func recipePNFromName(name string) string {
 	if idx := strings.Index(name, "_"); idx >= 0 {
 		return name[:idx]
 	}
-
 	return name
 }
 
 func modifiesRiskyVariables(lines []string) bool {
-	risky := []string{
-		"SRC_URI",
-		"FILESEXTRAPATHS",
-		"do_install",
-		"do_configure",
-		"do_compile",
-		"SYSTEMD_SERVICE",
-		"FILES:",
-		"RDEPENDS",
-		"DEPENDS",
-	}
-
+	risky := []string{"SRC_URI", "FILESEXTRAPATHS", "do_install", "do_configure", "do_compile", "SYSTEMD_SERVICE", "FILES:", "RDEPENDS", "DEPENDS"}
 	for _, line := range lines {
 		for _, key := range risky {
 			if strings.Contains(line, key) {
@@ -756,8 +596,26 @@ func modifiesRiskyVariables(lines []string) bool {
 			}
 		}
 	}
-
 	return false
+}
+
+func isFloatingRevision(value string) bool {
+	v := strings.TrimSpace(strings.ToLower(value))
+	if v == "" {
+		return false
+	}
+	if strings.Contains(v, "${autorev}") || strings.Contains(v, "autorev") {
+		return true
+	}
+	if v == "head" || v == "master" || v == "main" {
+		return true
+	}
+	return false
+}
+
+func containsBranchFloatingToken(value string) bool {
+	v := strings.ToLower(value)
+	return strings.Contains(v, "branch=master") || strings.Contains(v, "branch=main") || strings.Contains(v, "rev=head") || strings.Contains(v, "tag=latest")
 }
 
 func findLine(lines []string, needle string) int {
@@ -766,22 +624,11 @@ func findLine(lines []string, needle string) int {
 			return i + 1
 		}
 	}
-
 	return 1
 }
 
 func finding(ruleID string, title string, severity model.Severity, layer string, file string, line int, message string, why string, remediation string) model.Finding {
-	return model.Finding{
-		RuleID:       ruleID,
-		Title:        title,
-		Severity:     severity,
-		Layer:        layer,
-		File:         file,
-		Line:         line,
-		Message:      message,
-		WhyItMatters: why,
-		Remediation:  remediation,
-	}
+	return model.Finding{RuleID: ruleID, Title: title, Severity: severity, Layer: layer, File: file, Line: line, Message: message, WhyItMatters: why, Remediation: remediation}
 }
 
 func severityRank(sev model.Severity) int {
