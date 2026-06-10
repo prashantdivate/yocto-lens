@@ -26,6 +26,7 @@ const (
 	StateScanning ViewState = iota
 	StateDashboard
 	StateDetail
+	StateHealth
 	StateError
 )
 
@@ -84,6 +85,12 @@ func (f findingItem) FilterValue() string {
 	}, " ")
 }
 
+type recipeHealth struct {
+	Name     string
+	Score    int
+	Findings []model.Finding
+}
+
 type App struct {
 	paths []string
 
@@ -93,7 +100,8 @@ type App struct {
 	list    list.Model
 	spinner spinner.Model
 
-	mode AnalysisMode
+	mode        AnalysisMode
+	healthIndex int
 
 	state      ViewState
 	width      int
@@ -298,6 +306,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.report = m.Report
 		a.mode = ModeStaticAnalysis
+		a.healthIndex = 0
 		a.list = newFindingList(a.visibleFindings())
 		a.state = StateDashboard
 		return a, nil
@@ -313,18 +322,42 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.String() {
 		case "q", "ctrl+c":
 			return a, tea.Quit
-		case "m", "tab":
-			if a.state == StateDashboard {
+
+		case "s", "tab":
+			if a.state == StateDashboard || a.state == StateHealth {
 				a.toggleMode()
 			}
 			return a, nil
+
+		case "h":
+			if a.state == StateDashboard {
+				a.state = StateHealth
+				a.healthIndex = 0
+			} else if a.state == StateHealth {
+				a.state = StateDashboard
+			}
+			return a, nil
+
+		case "up", "k":
+			if a.state == StateHealth {
+				a.moveHealthSelection(-1)
+				return a, nil
+			}
+
+		case "down", "j":
+			if a.state == StateHealth {
+				a.moveHealthSelection(1)
+				return a, nil
+			}
+
 		case "enter":
 			if a.state == StateDashboard && a.list.SelectedItem() != nil {
 				a.state = StateDetail
 			}
 			return a, nil
+
 		case "esc":
-			if a.state == StateDetail {
+			if a.state == StateDetail || a.state == StateHealth {
 				a.state = StateDashboard
 			}
 			return a, nil
@@ -347,7 +380,24 @@ func (a *App) toggleMode() {
 		a.mode = ModeStaticAnalysis
 	}
 
+	a.healthIndex = 0
 	a.list = newFindingList(a.visibleFindings())
+}
+
+func (a *App) moveHealthSelection(delta int) {
+	rows := recipeHealthRows(a.visibleFindings())
+	if len(rows) == 0 {
+		a.healthIndex = 0
+		return
+	}
+
+	a.healthIndex += delta
+	if a.healthIndex < 0 {
+		a.healthIndex = 0
+	}
+	if a.healthIndex >= len(rows) {
+		a.healthIndex = len(rows) - 1
+	}
 }
 
 func (a App) visibleFindings() []model.Finding {
@@ -367,6 +417,8 @@ func (a App) View() string {
 		return a.scanView()
 	case StateDetail:
 		return a.detailView()
+	case StateHealth:
+		return a.healthView()
 	case StateError:
 		return a.errorView()
 	default:
@@ -431,7 +483,7 @@ func (a App) dashboardView() string {
 		leftW = w - rightW - gap
 	}
 
-	mainHeight := a.height - 17
+	mainHeight := a.height - 16
 	if mainHeight < 12 {
 		mainHeight = 12
 	}
@@ -489,6 +541,69 @@ func (a App) dashboardView() string {
 	return rootFrame(a.width, a.height, screen)
 }
 
+func (a App) healthView() string {
+	w := a.contentWidth()
+
+	header := a.header(w)
+	modeBar := a.modeBar(w)
+	overview := a.overviewPanel(w)
+
+	gap := 1
+	leftW := int(float64(w) * 0.50)
+	rightW := w - leftW - gap
+
+	if leftW < 50 {
+		leftW = 50
+		rightW = w - leftW - gap
+	}
+	if rightW < 40 {
+		rightW = 40
+		leftW = w - rightW - gap
+	}
+
+	mainHeight := a.height - 16
+	if mainHeight < 12 {
+		mainHeight = 12
+	}
+
+	rows := recipeHealthRows(a.visibleFindings())
+	if a.healthIndex >= len(rows) && len(rows) > 0 {
+		a.healthIndex = len(rows) - 1
+	}
+
+	leaderboard := panel(
+		"recipe health leaderboard",
+		a.healthLeaderboardText(leftW-4, mainHeight-3),
+		leftW,
+		mainHeight,
+	)
+
+	detail := panel(
+		"recipe health detail",
+		a.healthDetailText(rightW-4, mainHeight-3),
+		rightW,
+		mainHeight,
+	)
+
+	mainRow := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		leaderboard,
+		strings.Repeat(" ", gap),
+		detail,
+	)
+
+	screen := lipgloss.JoinVertical(
+		lipgloss.Left,
+		header,
+		modeBar,
+		overview,
+		mainRow,
+		a.footer(w),
+	)
+
+	return rootFrame(a.width, a.height, screen)
+}
+
 func (a App) detailView() string {
 	w := a.contentWidth()
 
@@ -498,9 +613,10 @@ func (a App) detailView() string {
 	}
 
 	f := selected.Finding
+	recipeFindings := findingsForRecipe(a.visibleFindings(), f)
 
 	body := strings.Join([]string{
-		detailHeader(f, w-6),
+		detailHeader(f, recipeFindings, w-6),
 		section("Problem", f.Message, w-6),
 		section("Why it matters", f.WhyItMatters, w-6),
 		section("Recommended fix", f.Remediation, w-6),
@@ -547,10 +663,26 @@ func (a App) modeBar(w int) string {
 	staticTab := modeTab(fmt.Sprintf("Static Analysis %d", staticCount), a.mode == ModeStaticAnalysis)
 	styleTab := modeTab(fmt.Sprintf("Style Check %d", styleCount), a.mode == ModeStyleCheck)
 
+	healthTab := lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Background(colorBg3).
+		Bold(true).
+		Padding(0, 2).
+		Render("Health h")
+
+	if a.state == StateHealth {
+		healthTab = lipgloss.NewStyle().
+			Foreground(colorBg0).
+			Background(colorGreen).
+			Bold(true).
+			Padding(0, 2).
+			Render("Health h")
+	}
+
 	return lipgloss.NewStyle().
 		Width(w).
 		Background(colorBg0).
-		Render(modeLabel + " " + staticTab + " " + styleTab)
+		Render(modeLabel + " " + staticTab + " " + styleTab + " " + healthTab)
 }
 
 func modeTab(name string, active bool) string {
@@ -705,6 +837,7 @@ func (a App) previewText(width int, height int) string {
 		styleBold(colorGreen).Render("Fix"),
 		wrapText(emptyDash(f.Remediation), width),
 		"",
+		muted("Press h for health mode."),
 		muted("Press / to fuzzy-search rule, severity, file, layer, or title."),
 		muted("Press enter for full detail."),
 	}
@@ -712,11 +845,11 @@ func (a App) previewText(width int, height int) string {
 	return trimHeight(strings.Join(lines, "\n"), height)
 }
 
-func detailHeader(f model.Finding, width int) string {
+func detailHeader(f model.Finding, recipeFindings []model.Finding, width int) string {
 	lines := []string{
 		styleBold(colorText).Render(f.Title),
 		"",
-		healthBar("Recipe Health", healthScore([]model.Finding{f}), width),
+		healthBar("Recipe Health", healthScore(recipeFindings), width),
 		"",
 		label("Severity") + " " + severityText(f.Severity),
 		label("Rule") + " " + normal(emptyDash(f.RuleID)),
@@ -726,6 +859,102 @@ func detailHeader(f model.Finding, width int) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func (a App) healthLeaderboardText(width int, height int) string {
+	rows := recipeHealthRows(a.visibleFindings())
+	if len(rows) == 0 {
+		return muted("No recipe findings in this mode.")
+	}
+
+	lines := []string{
+		muted("Use ↑/↓ or k/j to move. esc/h returns to findings."),
+		"",
+	}
+
+	for i, row := range rows {
+		prefix := "  "
+		bg := colorBg1
+		nameFg := colorText
+		scoreFg := healthColor(row.Score)
+
+		if i == a.healthIndex {
+			prefix = "▸ "
+			bg = colorSelected
+			nameFg = colorBg0
+			scoreFg = colorBg0
+		}
+
+		nameWidth := width - 22
+		if nameWidth < 12 {
+			nameWidth = 12
+		}
+
+		line := prefix +
+			lipgloss.NewStyle().Foreground(scoreFg).Background(bg).Bold(true).Render(fmt.Sprintf("%3d", row.Score)) +
+			lipgloss.NewStyle().Foreground(nameFg).Background(bg).Render("/100 ") +
+			lipgloss.NewStyle().Foreground(nameFg).Background(bg).Bold(true).Render(truncate(row.Name, nameWidth)) +
+			lipgloss.NewStyle().Foreground(nameFg).Background(bg).Render(fmt.Sprintf("  %d issues", len(row.Findings)))
+
+		lines = append(lines, lipgloss.NewStyle().
+			Width(width).
+			Background(bg).
+			Render(line))
+	}
+
+	return trimHeight(strings.Join(lines, "\n"), height)
+}
+
+func (a App) healthDetailText(width int, height int) string {
+	rows := recipeHealthRows(a.visibleFindings())
+	if len(rows) == 0 {
+		return muted("No recipe selected.")
+	}
+
+	index := a.healthIndex
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(rows) {
+		index = len(rows) - 1
+	}
+
+	row := rows[index]
+	high, medium, low := counts(row.Findings)
+
+	lines := []string{
+		styleBold(colorAccent).Render(row.Name),
+		"",
+		healthBar("Health", row.Score, width),
+		"",
+		label("Findings") + " " + normal(fmt.Sprintf("%d", len(row.Findings))),
+		label("High") + " " + severityColorText(model.SeverityHigh, fmt.Sprintf("%d", high)),
+		label("Medium") + " " + severityColorText(model.SeverityMedium, fmt.Sprintf("%d", medium)),
+		label("Low") + " " + severityColorText(model.SeverityLow, fmt.Sprintf("%d", low)),
+		"",
+		styleBold(colorGreen).Render("Top Issues"),
+	}
+
+	maxIssues := height - len(lines) - 3
+	if maxIssues < 3 {
+		maxIssues = 3
+	}
+
+	for i, finding := range row.Findings {
+		if i >= maxIssues {
+			break
+		}
+
+		lines = append(lines,
+			severityBadge(finding.Severity)+" "+
+				styleBold(colorText).Render(finding.Title),
+			muted("  "+compactPath(finding.File, width-6)+fmt.Sprintf(":%d", finding.Line)),
+		)
+	}
+
+	lines = append(lines, "", muted("h/esc back • s/tab switch analysis-mode • q quit"))
+
+	return trimHeight(strings.Join(lines, "\n"), height)
 }
 
 func section(name string, text string, width int) string {
@@ -810,7 +1039,6 @@ func healthBar(labelText string, score int, width int) string {
 	}
 
 	empty := barWidth - filled
-
 	barColor := healthColor(score)
 
 	bar := lipgloss.NewStyle().
@@ -824,6 +1052,38 @@ func healthBar(labelText string, score int, width int) string {
 		Foreground(barColor).
 		Bold(true).
 		Render(scoreText)
+}
+
+func recipeHealthRows(findings []model.Finding) []recipeHealth {
+	grouped := map[string][]model.Finding{}
+
+	for _, finding := range findings {
+		name := recipeNameFromPath(finding.File)
+		if name == "" || name == "." {
+			name = "unknown"
+		}
+		grouped[name] = append(grouped[name], finding)
+	}
+
+	rows := make([]recipeHealth, 0, len(grouped))
+	for name, fs := range grouped {
+		rows = append(rows, recipeHealth{
+			Name:     name,
+			Score:    healthScore(fs),
+			Findings: fs,
+		})
+	}
+
+	for i := 0; i < len(rows); i++ {
+		for j := i + 1; j < len(rows); j++ {
+			if rows[j].Score < rows[i].Score ||
+				(rows[j].Score == rows[i].Score && len(rows[j].Findings) > len(rows[i].Findings)) {
+				rows[i], rows[j] = rows[j], rows[i]
+			}
+		}
+	}
+
+	return rows
 }
 
 func findingsForRecipe(findings []model.Finding, selected model.Finding) []model.Finding {
@@ -1005,7 +1265,8 @@ func (a App) footer(w int) string {
 	parts := []string{
 		key("↑/k") + muted(" up"),
 		key("↓/j") + muted(" down"),
-		key("m/tab") + muted(" mode"),
+		key("h") + muted(" health"),
+		key("s") + muted(" static/style analysis-mode"),
 		key("/") + muted(" fuzzy search"),
 		key("enter") + muted(" details"),
 		key("esc") + muted(" back"),
