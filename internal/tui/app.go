@@ -82,6 +82,8 @@ func (f findingItem) FilterValue() string {
 		f.Finding.RuleID,
 		string(f.Finding.Severity),
 		f.Finding.Message,
+		f.Finding.WhyItMatters,
+		f.Finding.Remediation,
 	}, " ")
 }
 
@@ -102,6 +104,9 @@ type App struct {
 
 	mode        AnalysisMode
 	healthIndex int
+
+	searchActive bool
+	searchQuery  string
 
 	state      ViewState
 	width      int
@@ -136,7 +141,7 @@ func New(r model.Report) App {
 	app.report = r
 	app.state = StateDashboard
 	app.mode = ModeStaticAnalysis
-	app.list = newFindingList(app.visibleFindings())
+	app.refreshFindingList()
 	return app
 }
 
@@ -267,7 +272,7 @@ func newFindingList(findings []model.Finding) list.Model {
 	l.Title = ""
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
-	l.SetFilteringEnabled(true)
+	l.SetFilteringEnabled(false)
 	l.SetShowHelp(false)
 	l.SetShowPagination(false)
 	l.SetShowFilter(false)
@@ -307,7 +312,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.report = m.Report
 		a.mode = ModeStaticAnalysis
 		a.healthIndex = 0
-		a.list = newFindingList(a.visibleFindings())
+		a.searchActive = false
+		a.searchQuery = ""
+		a.refreshFindingList()
 		a.state = StateDashboard
 		return a, nil
 
@@ -319,9 +326,21 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		if a.searchActive {
+			return a.updateSearch(m)
+		}
+
 		switch m.String() {
 		case "q", "ctrl+c":
 			return a, tea.Quit
+
+		case "/":
+			if a.state == StateDashboard {
+				a.searchActive = true
+				a.searchQuery = ""
+				a.refreshFindingList()
+			}
+			return a, nil
 
 		case "s", "tab":
 			if a.state == StateDashboard || a.state == StateHealth {
@@ -333,6 +352,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.state == StateDashboard {
 				a.state = StateHealth
 				a.healthIndex = 0
+				a.searchActive = false
 			} else if a.state == StateHealth {
 				a.state = StateDashboard
 			}
@@ -373,6 +393,43 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+func (a App) updateSearch(m tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.String() {
+	case "ctrl+c":
+		return a, tea.Quit
+
+	case "esc":
+		a.searchActive = false
+		a.searchQuery = ""
+		a.refreshFindingList()
+		return a, nil
+
+	case "enter":
+		a.searchActive = false
+		return a, nil
+
+	case "backspace", "ctrl+h":
+		runes := []rune(a.searchQuery)
+		if len(runes) > 0 {
+			a.searchQuery = string(runes[:len(runes)-1])
+			a.refreshFindingList()
+		}
+		return a, nil
+
+	case "ctrl+u":
+		a.searchQuery = ""
+		a.refreshFindingList()
+		return a, nil
+	}
+
+	if len(m.Runes) > 0 {
+		a.searchQuery += string(m.Runes)
+		a.refreshFindingList()
+	}
+
+	return a, nil
+}
+
 func (a *App) toggleMode() {
 	if a.mode == ModeStaticAnalysis {
 		a.mode = ModeStyleCheck
@@ -381,6 +438,12 @@ func (a *App) toggleMode() {
 	}
 
 	a.healthIndex = 0
+	a.searchActive = false
+	a.searchQuery = ""
+	a.refreshFindingList()
+}
+
+func (a *App) refreshFindingList() {
 	a.list = newFindingList(a.visibleFindings())
 }
 
@@ -401,7 +464,33 @@ func (a *App) moveHealthSelection(delta int) {
 }
 
 func (a App) visibleFindings() []model.Finding {
-	return filterFindingsByMode(a.report.Findings, a.mode)
+	findings := filterFindingsByMode(a.report.Findings, a.mode)
+
+	query := strings.TrimSpace(strings.ToLower(a.searchQuery))
+	if query == "" {
+		return findings
+	}
+
+	tokens := strings.Fields(query)
+	filtered := make([]model.Finding, 0, len(findings))
+
+	for _, finding := range findings {
+		value := strings.ToLower(findingItem{Finding: finding}.FilterValue())
+
+		matched := true
+		for _, token := range tokens {
+			if !strings.Contains(value, token) {
+				matched = false
+				break
+			}
+		}
+
+		if matched {
+			filtered = append(filtered, finding)
+		}
+	}
+
+	return filtered
 }
 
 func (a App) View() string {
@@ -483,7 +572,12 @@ func (a App) dashboardView() string {
 		leftW = w - rightW - gap
 	}
 
-	mainHeight := a.height - 16
+	searchHeight := 0
+	if a.searchActive {
+		searchHeight = 7
+	}
+
+	mainHeight := a.height - 16 - searchHeight
 	if mainHeight < 12 {
 		mainHeight = 12
 	}
@@ -527,15 +621,21 @@ func (a App) dashboardView() string {
 		inspector,
 	)
 
-	footer := a.footer(w)
-
-	screen := lipgloss.JoinVertical(
-		lipgloss.Left,
+	sections := []string{
 		header,
 		modeBar,
 		overview,
-		mainRow,
-		footer,
+	}
+
+	if a.searchActive {
+		sections = append(sections, centerBox(a.searchBox(w), w))
+	}
+
+	sections = append(sections, mainRow, a.footer(w))
+
+	screen := lipgloss.JoinVertical(
+		lipgloss.Left,
+		sections...,
 	)
 
 	return rootFrame(a.width, a.height, screen)
@@ -679,10 +779,20 @@ func (a App) modeBar(w int) string {
 			Render("Health h")
 	}
 
+	searchLabel := ""
+	if strings.TrimSpace(a.searchQuery) != "" {
+		searchLabel = " " + lipgloss.NewStyle().
+			Foreground(colorBg0).
+			Background(colorGreen).
+			Bold(true).
+			Padding(0, 1).
+			Render("Search: "+truncate(a.searchQuery, 24))
+	}
+
 	return lipgloss.NewStyle().
 		Width(w).
 		Background(colorBg0).
-		Render(modeLabel + " " + staticTab + " " + styleTab + " " + healthTab)
+		Render(modeLabel + " " + staticTab + " " + styleTab + " " + healthTab + searchLabel)
 }
 
 func modeTab(name string, active bool) string {
@@ -813,6 +923,9 @@ func issueMix(width int, high int, medium int, low int) string {
 func (a App) previewText(width int, height int) string {
 	selected, ok := a.list.SelectedItem().(findingItem)
 	if !ok {
+		if strings.TrimSpace(a.searchQuery) != "" {
+			return muted("No findings matched search: ") + normal(a.searchQuery)
+		}
 		return muted("No finding selected.")
 	}
 
@@ -838,7 +951,7 @@ func (a App) previewText(width int, height int) string {
 		wrapText(emptyDash(f.Remediation), width),
 		"",
 		muted("Press h for health mode."),
-		muted("Press / to fuzzy-search rule, severity, file, layer, or title."),
+		muted("Press / to search. enter applies. esc clears."),
 		muted("Press enter for full detail."),
 	}
 
@@ -894,7 +1007,7 @@ func (a App) healthLeaderboardText(width int, height int) string {
 			lipgloss.NewStyle().Foreground(scoreFg).Background(bg).Bold(true).Render(fmt.Sprintf("%3d", row.Score)) +
 			lipgloss.NewStyle().Foreground(nameFg).Background(bg).Render("/100 ") +
 			lipgloss.NewStyle().Foreground(nameFg).Background(bg).Bold(true).Render(truncate(row.Name, nameWidth)) +
-			lipgloss.NewStyle().Foreground(nameFg).Background(bg).Render(fmt.Sprintf("  %d issues", len(row.Findings)))
+			lipgloss.NewStyle().Foreground(nameFg).Background(bg).Render(fmt.Sprintf(" %d issues", len(row.Findings)))
 
 		lines = append(lines, lipgloss.NewStyle().
 			Width(width).
@@ -948,7 +1061,7 @@ func (a App) healthDetailText(width int, height int) string {
 		lines = append(lines,
 			severityBadge(finding.Severity)+" "+
 				styleBold(colorText).Render(finding.Title),
-			muted("  "+compactPath(finding.File, width-6)+fmt.Sprintf(":%d", finding.Line)),
+			muted(" "+compactPath(finding.File, width-6)+fmt.Sprintf(":%d", finding.Line)),
 		)
 	}
 
@@ -1261,15 +1374,61 @@ func (a App) pageIndicator(width int) string {
 		Render(muted(line))
 }
 
+func (a App) searchBox(width int) string {
+	boxWidth := 70
+	if width < boxWidth+4 {
+		boxWidth = width - 4
+	}
+	if boxWidth < 32 {
+		boxWidth = 32
+	}
+
+	query := a.searchQuery
+	if query == "" {
+		query = "type rule, severity, file, layer, title..."
+	}
+
+	input := key(">") + " " +
+		lipgloss.NewStyle().
+			Foreground(colorText).
+			Background(colorBg1).
+			Render(query) +
+		styleBold(colorAccent).Render("█")
+
+	body := strings.Join([]string{
+		styleBold(colorGreen).Render("Search findings"),
+		"",
+		input,
+		"",
+		muted(fmt.Sprintf("matches %d • enter apply • esc clear • ctrl+u clear line", len(a.visibleFindings()))),
+	}, "\n")
+
+	return lipgloss.NewStyle().
+		Width(boxWidth).
+		Background(colorBg1).
+		Foreground(colorText).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorGreen).
+		Padding(1, 2).
+		Render(body)
+}
+
+func centerBox(content string, width int) string {
+	return lipgloss.NewStyle().
+		Width(width).
+		Align(lipgloss.Center).
+		Render(content)
+}
+
 func (a App) footer(w int) string {
 	parts := []string{
 		key("↑/k") + muted(" up"),
 		key("↓/j") + muted(" down"),
 		key("h") + muted(" health"),
 		key("s") + muted(" static/style analysis-mode"),
-		key("/") + muted(" fuzzy search"),
+		key("/") + muted(" search"),
 		key("enter") + muted(" details"),
-		key("esc") + muted(" back"),
+		key("esc") + muted(" back/clear"),
 		key("q") + muted(" quit"),
 	}
 
