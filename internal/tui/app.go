@@ -2,9 +2,10 @@ package tui
 
 import (
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
-    "io"
+
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,6 +28,20 @@ const (
 	StateDetail
 	StateError
 )
+
+type AnalysisMode int
+
+const (
+	ModeStaticAnalysis AnalysisMode = iota
+	ModeStyleCheck
+)
+
+func (m AnalysisMode) String() string {
+	if m == ModeStyleCheck {
+		return "Style Check"
+	}
+	return "Static Analysis"
+}
 
 type progressMsg model.ScanProgress
 
@@ -78,6 +93,8 @@ type App struct {
 	list    list.Model
 	spinner spinner.Model
 
+	mode AnalysisMode
+
 	state      ViewState
 	width      int
 	height     int
@@ -95,6 +112,7 @@ func NewLoading(paths []string) App {
 	return App{
 		paths:   paths,
 		state:   StateScanning,
+		mode:    ModeStaticAnalysis,
 		width:   120,
 		height:  38,
 		spinner: s,
@@ -109,7 +127,8 @@ func New(r model.Report) App {
 	app := NewLoading(nil)
 	app.report = r
 	app.state = StateDashboard
-	app.list = newFindingList(r.Findings)
+	app.mode = ModeStaticAnalysis
+	app.list = newFindingList(app.visibleFindings())
 	return app
 }
 
@@ -193,13 +212,11 @@ func (d findingDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	}
 
 	bg := colorBg1
-	fg := colorText
 	titleFg := colorAccent
 	descFg := colorText
 
 	if index == m.Index() {
 		bg = colorSelected
-		fg = colorBg0
 		titleFg = colorBg0
 		descFg = colorBg0
 	}
@@ -230,8 +247,6 @@ func (d findingDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		Render("")
 
 	fmt.Fprint(w, title+"\n"+desc+"\n"+blank)
-
-	_ = fg
 }
 
 func newFindingList(findings []model.Finding) list.Model {
@@ -282,7 +297,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.report = m.Report
-		a.list = newFindingList(m.Report.Findings)
+		a.mode = ModeStaticAnalysis
+		a.list = newFindingList(a.visibleFindings())
 		a.state = StateDashboard
 		return a, nil
 
@@ -297,6 +313,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.String() {
 		case "q", "ctrl+c":
 			return a, tea.Quit
+		case "m":
+			if a.state == StateDashboard {
+				a.toggleMode()
+			}
+			return a, nil
 		case "enter":
 			if a.state == StateDashboard && a.list.SelectedItem() != nil {
 				a.state = StateDetail
@@ -317,6 +338,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return a, nil
+}
+
+func (a *App) toggleMode() {
+	if a.mode == ModeStaticAnalysis {
+		a.mode = ModeStyleCheck
+	} else {
+		a.mode = ModeStaticAnalysis
+	}
+
+	a.list = newFindingList(a.visibleFindings())
+}
+
+func (a App) visibleFindings() []model.Finding {
+	return filterFindingsByMode(a.report.Findings, a.mode)
 }
 
 func (a App) View() string {
@@ -380,6 +415,7 @@ func (a App) dashboardView() string {
 	w := a.contentWidth()
 
 	header := a.header(w)
+	modeBar := a.modeBar(w)
 	overview := a.overviewPanel(w)
 
 	gap := 1
@@ -395,7 +431,7 @@ func (a App) dashboardView() string {
 		leftW = w - rightW - gap
 	}
 
-	mainHeight := a.height - 15
+	mainHeight := a.height - 16
 	if mainHeight < 12 {
 		mainHeight = 12
 	}
@@ -444,6 +480,7 @@ func (a App) dashboardView() string {
 	screen := lipgloss.JoinVertical(
 		lipgloss.Left,
 		header,
+		modeBar,
 		overview,
 		mainRow,
 		footer,
@@ -473,18 +510,18 @@ func (a App) detailView() string {
 	screen := lipgloss.JoinVertical(
 		lipgloss.Left,
 		a.header(w),
-		panel("finding detail", body, w, a.height-5),
+		a.modeBar(w),
+		panel("finding detail", body, w, a.height-6),
 	)
 
 	return rootFrame(a.width, a.height, screen)
 }
 
 func (a App) header(w int) string {
-	left := styleBold(colorAccent).Render(" Yocto Lens ")
-	mid := styleBold(colorGreen).Render(" static analysis ")
+	left := styleBold(colorAccent).Render(" YOCTO LENS ")
 	right := muted("Yocto / BitBake metadata scanner")
 
-	used := lipgloss.Width(left) + lipgloss.Width(mid) + lipgloss.Width(right)
+	used := lipgloss.Width(left) + lipgloss.Width(right)
 	spaces := w - used
 	if spaces < 1 {
 		spaces = 1
@@ -493,12 +530,53 @@ func (a App) header(w int) string {
 	return lipgloss.NewStyle().
 		Width(w).
 		Background(colorBg0).
-		Render(left + mid + strings.Repeat(" ", spaces) + right)
+		Render(left + strings.Repeat(" ", spaces) + right)
+}
+
+func (a App) modeBar(w int) string {
+	staticCount := len(filterFindingsByMode(a.report.Findings, ModeStaticAnalysis))
+	styleCount := len(filterFindingsByMode(a.report.Findings, ModeStyleCheck))
+
+	modeLabel := lipgloss.NewStyle().
+		Foreground(colorText).
+		Background(colorBg3).
+		Bold(true).
+		Padding(0, 1).
+		Render("Mode")
+
+	staticTab := modeTab(fmt.Sprintf("Static Analysis %d", staticCount), a.mode == ModeStaticAnalysis)
+	styleTab := modeTab(fmt.Sprintf("Style Check %d", styleCount), a.mode == ModeStyleCheck)
+
+	left := modeLabel + " " + staticTab + " " + styleTab
+
+	return lipgloss.NewStyle().
+		Width(w).
+		Background(colorBg0).
+		Render(left)
+}
+
+func modeTab(name string, active bool) string {
+	if active {
+		return lipgloss.NewStyle().
+			Foreground(colorBg0).
+			Background(colorAccent).
+			Bold(true).
+			Padding(0, 2).
+			Render(name)
+	}
+
+	return lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Background(colorBg3).
+		Bold(true).
+		Padding(0, 2).
+		Render(name)
 }
 
 func (a App) overviewPanel(w int) string {
-	high, medium, low := counts(a.report.Findings)
-	score := riskScore(a.report.Findings)
+	visible := a.visibleFindings()
+	high, medium, low := counts(visible)
+	score := riskScore(visible)
 
 	gap := 1
 	cardCount := 6
@@ -517,7 +595,7 @@ func (a App) overviewPanel(w int) string {
 		strings.Repeat(" ", gap),
 		statCard("Patches", fmt.Sprintf("%d", len(a.report.Patches)), cardWidth),
 		strings.Repeat(" ", gap),
-		statCard("Findings", fmt.Sprintf("%d", len(a.report.Findings)), cardWidth),
+		statCard("Findings", fmt.Sprintf("%d", len(visible)), cardWidth),
 		strings.Repeat(" ", gap),
 		statCard("Risk", riskLabel(score), cardWidth),
 	)
@@ -706,10 +784,6 @@ func panel(title string, body string, totalWidth int, totalHeight int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, titleLine, box)
 }
 
-func putPanelTitle(rendered string, title string) string {
-	return rendered
-}
-
 func fitPanelBody(body string, height int) string {
 	lines := strings.Split(body, "\n")
 	if len(lines) > height {
@@ -812,6 +886,7 @@ func (a App) footer(w int) string {
 	parts := []string{
 		key("↑/k") + muted(" up"),
 		key("↓/j") + muted(" down"),
+		key("m") + muted(" mode"),
 		key("/") + muted(" fuzzy search"),
 		key("enter") + muted(" details"),
 		key("esc") + muted(" back"),
@@ -841,6 +916,95 @@ func (a App) contentWidth() int {
 		w = minWidth - 2
 	}
 	return w
+}
+
+func filterFindingsByMode(findings []model.Finding, mode AnalysisMode) []model.Finding {
+	filtered := make([]model.Finding, 0, len(findings))
+
+	for _, finding := range findings {
+		isStyle := isStyleFinding(finding)
+
+		if mode == ModeStyleCheck && isStyle {
+			filtered = append(filtered, finding)
+		}
+
+		if mode == ModeStaticAnalysis && !isStyle {
+			filtered = append(filtered, finding)
+		}
+	}
+
+	return filtered
+}
+
+func isStyleFinding(f model.Finding) bool {
+	rule := strings.ToLower(f.RuleID)
+	title := strings.ToLower(f.Title)
+	message := strings.ToLower(f.Message)
+
+	staticRules := []string{
+		"autorev",
+		"srcrev",
+		"floating",
+		"lic_files_chksum",
+		"license",
+		"checksum",
+		"patch",
+		"cve",
+		"security",
+		"vulnerability",
+		"privileged",
+		"host-network",
+		"missing",
+		"pinned",
+	}
+
+	for _, keyword := range staticRules {
+		if strings.Contains(rule, keyword) ||
+			strings.Contains(title, keyword) ||
+			strings.Contains(message, keyword) {
+			return false
+		}
+	}
+
+	styleRules := []string{
+		"style",
+		"format",
+		"formatting",
+		"indent",
+		"indentation",
+		"whitespace",
+		"spacing",
+		"naming",
+		"lowercase",
+		"uppercase",
+		"case",
+		"order",
+		"ordering",
+		"sort",
+		"sorted",
+		"comment",
+		"comments",
+		"trailing",
+		"blank-line",
+		"blank_line",
+		"line-length",
+		"line_length",
+		"recipe-name",
+		"variable-order",
+		"section-order",
+		"metadata-style",
+		"bbappend-style",
+	}
+
+	for _, keyword := range styleRules {
+		if strings.Contains(rule, keyword) ||
+			strings.Contains(title, keyword) ||
+			strings.Contains(message, keyword) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func counts(findings []model.Finding) (int, int, int) {
@@ -1033,11 +1197,10 @@ func key(s string) string {
 }
 
 var (
-	// Gruvbox Material Dark, closer to your reference screenshot
-	colorBg0 = lipgloss.Color("#282828") // main editor bg
-	colorBg1 = lipgloss.Color("#1d2021") // panel bg
-	colorBg2 = lipgloss.Color("#282828") // main editor bg
-	colorBg3 = lipgloss.Color("#3c3836") // card / row bg
+	colorBg0 = lipgloss.Color("#282828")
+	colorBg1 = lipgloss.Color("#1d2021")
+	colorBg2 = lipgloss.Color("#282828")
+	colorBg3 = lipgloss.Color("#3c3836")
 
 	colorBorder   = lipgloss.Color("#504945")
 	colorSelected = lipgloss.Color("#d8a657")
