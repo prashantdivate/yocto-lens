@@ -1201,6 +1201,7 @@ func checkPatchStatic(patch model.Patch) []model.Finding {
 	var findings []model.Finding
 
 	content := strings.Join(patch.Lines, "\n")
+	lower := strings.ToLower(content)
 	upperName := strings.ToUpper(filepath.Base(patch.Path))
 
 	if strings.Contains(upperName, "CVE") && !strings.Contains(content, "CVE-") {
@@ -1217,15 +1218,76 @@ func checkPatchStatic(patch model.Patch) []model.Finding {
 		))
 	}
 
+	if strings.Contains(upperName, "CVE") && !strings.Contains(lower, "upstream-status:") {
+		findings = append(findings, finding(
+			"static/patch-cve-missing-upstream-status",
+			"CVE patch missing Upstream-Status",
+			model.SeverityHigh,
+			patch.Layer,
+			patch.Path,
+			1,
+			"CVE-related patch does not declare Upstream-Status.",
+			"Security patches should clearly show whether they are backports, submitted upstream, pending, or inappropriate for upstream.",
+			"Add an Upstream-Status header such as Backport, Submitted, Pending, or Inappropriate with explanation.",
+		))
+	}
+
+	if strings.Contains(lower, "password") ||
+		strings.Contains(lower, "secret") ||
+		strings.Contains(lower, "private key") ||
+		strings.Contains(lower, "token") {
+		findings = append(findings, finding(
+			"static/patch-possible-secret",
+			"Patch may contain secret material",
+			model.SeverityHigh,
+			patch.Layer,
+			patch.Path,
+			1,
+			"Patch content contains words commonly associated with secrets.",
+			"Secrets in patches can leak into source control, build logs, images, or deployed devices.",
+			"Review the patch and remove credentials, private keys, tokens, or test secrets.",
+		))
+	}
+
 	return findings
+}
+
+func hasPatchSubject(lines []string) bool {
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "Subject:") {
+			return true
+		}
+
+		if strings.HasPrefix(trimmed, "[PATCH") {
+			return true
+		}
+	}
+
+	return false
+}
+
+func containsDiffMarkers(lines []string) bool {
+	for _, line := range lines {
+		if strings.HasPrefix(line, "diff --git ") ||
+			strings.HasPrefix(line, "--- ") ||
+			strings.HasPrefix(line, "+++ ") ||
+			strings.HasPrefix(line, "@@ ") {
+			return true
+		}
+	}
+
+	return false
 }
 
 func checkPatchStyle(patch model.Patch) []model.Finding {
 	var findings []model.Finding
 
 	content := strings.Join(patch.Lines, "\n")
+	lower := strings.ToLower(content)
 
-	if !strings.Contains(content, "Upstream-Status:") {
+	if !strings.Contains(lower, "upstream-status:") {
 		findings = append(findings, finding(
 			"style/patch-missing-upstream-status",
 			"Patch missing Upstream-Status",
@@ -1239,7 +1301,7 @@ func checkPatchStyle(patch model.Patch) []model.Finding {
 		))
 	}
 
-	if !strings.Contains(content, "Signed-off-by:") {
+	if !strings.Contains(lower, "signed-off-by:") {
 		findings = append(findings, finding(
 			"style/patch-missing-signed-off-by",
 			"Patch missing Signed-off-by",
@@ -1250,6 +1312,48 @@ func checkPatchStyle(patch model.Patch) []model.Finding {
 			"Patch does not contain a Signed-off-by trailer.",
 			"Signed-off-by improves patch provenance and review hygiene.",
 			"Add a Signed-off-by line to the patch trailer when appropriate for your project.",
+		))
+	}
+
+	if !strings.Contains(lower, "subject:") && !hasPatchSubject(patch.Lines) {
+		findings = append(findings, finding(
+			"style/patch-missing-subject",
+			"Patch missing subject",
+			model.SeverityLow,
+			patch.Layer,
+			patch.Path,
+			1,
+			"Patch does not appear to contain a clear subject header.",
+			"A clear patch subject makes review, rebasing, and upstream submission easier.",
+			"Add a concise patch subject explaining what the patch changes.",
+		))
+	}
+
+	if !strings.Contains(lower, "from ") && !strings.Contains(lower, "author:") {
+		findings = append(findings, finding(
+			"style/patch-missing-author",
+			"Patch missing author information",
+			model.SeverityLow,
+			patch.Layer,
+			patch.Path,
+			1,
+			"Patch does not appear to contain author metadata.",
+			"Author metadata helps track patch provenance and ownership.",
+			"Generate patches with git format-patch or add author metadata.",
+		))
+	}
+
+	if !containsDiffMarkers(patch.Lines) {
+		findings = append(findings, finding(
+			"style/patch-no-diff-markers",
+			"Patch has no diff markers",
+			model.SeverityMedium,
+			patch.Layer,
+			patch.Path,
+			1,
+			"Patch does not contain recognizable diff markers.",
+			"Malformed patches may fail during do_patch or silently become unusable.",
+			"Regenerate the patch with git format-patch or diff -u.",
 		))
 	}
 
