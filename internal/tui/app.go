@@ -577,7 +577,7 @@ func (a App) dashboardView() string {
 		searchHeight = 7
 	}
 
-	mainHeight := a.height - 16 - searchHeight
+	mainHeight := a.height - 20 - searchHeight
 	if mainHeight < 12 {
 		mainHeight = 12
 	}
@@ -727,17 +727,26 @@ func (a App) detailView() string {
 		lipgloss.Left,
 		a.header(w),
 		a.modeBar(w),
-		panel("finding detail", body, w, a.height-6),
+		panel("finding detail", body, w, a.height-10),
 	)
 
 	return rootFrame(a.width, a.height, screen)
 }
 
-func (a App) header(w int) string {
-	left := styleBold(colorAccent).Render(" YOCTO LENS ")
-	right := muted("Yocto / BitBake metadata scanner")
+/*func (a App) header(w int) string {
+	title := lipgloss.NewStyle().
+		Foreground(colorAccent).
+		Background(colorBg0).
+		Bold(true).
+		Padding(0, 1).
+		Render("🔍 YOCTO LENS")
 
-	used := lipgloss.Width(left) + lipgloss.Width(right)
+	subtitle := lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Background(colorBg0).
+		Render("Yocto / BitBake metadata scanner")
+
+	used := lipgloss.Width(title) + lipgloss.Width(subtitle)
 	spaces := w - used
 	if spaces < 1 {
 		spaces = 1
@@ -746,7 +755,57 @@ func (a App) header(w int) string {
 	return lipgloss.NewStyle().
 		Width(w).
 		Background(colorBg0).
-		Render(left + strings.Repeat(" ", spaces) + right)
+		Render(title + strings.Repeat(" ", spaces) + subtitle)
+}
+*/
+
+func (a App) header(w int) string {
+
+    bannerLines := []string{
+    " \\ \\   /             |               |                    ",
+    "  \\   /  _ \\    __|  __|   _ \\       |   _ \\  __ \\    __| ",
+    "     |  (   |  (     |    (   |      |   __/  |   | \\__ \\ ",
+    "    _| \\___/  \\___| \\__| \\___/      _| \\___| _|  _| ____/ ",
+    }
+
+	banner := strings.Join(bannerLines, "\n")
+
+	maxBannerWidth := w - 6
+	if maxBannerWidth < 20 {
+		maxBannerWidth = 20
+	}
+
+	if lipgloss.Width(banner) > maxBannerWidth {
+		banner = "🔍 YOCTO LENS"
+	}
+
+	title := lipgloss.NewStyle().
+		Foreground(colorAccent).
+		Background(colorBg1).
+		Bold(true).
+		Render(banner)
+
+	subtitle := lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Background(colorBg1).
+		Italic(true).
+        MarginTop(1). // add one blank line
+		Render("Static Analysis • Style Review • Recipe Health")
+
+	body := lipgloss.JoinVertical(
+		lipgloss.Center,
+		title,
+		subtitle,
+	)
+
+	return lipgloss.NewStyle().
+		Width(w - 4).
+		Background(colorBg1).
+		Foreground(colorText).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorBorder).
+		Padding(0, 1).
+		Render(body)
 }
 
 func (a App) modeBar(w int) string {
@@ -815,9 +874,7 @@ func modeTab(name string, active bool) string {
 
 func (a App) overviewPanel(w int) string {
 	visible := a.visibleFindings()
-	high, medium, low := counts(visible)
 	score := riskScore(visible)
-	health := healthScore(visible)
 
 	gap := 1
 	cardCount := 6
@@ -841,15 +898,7 @@ func (a App) overviewPanel(w int) string {
 		statCard("Risk", riskLabel(score), cardWidth),
 	)
 
-	body := lipgloss.JoinVertical(
-		lipgloss.Left,
-		cards,
-		"",
-		healthBar("Recipe Health", health, w-4),
-		issueMix(w-4, high, medium, low),
-	)
-
-	return panel("overview", body, w, 9)
+	return panel("overview", cards, w, 9)
 }
 
 func statCard(name string, value string, totalWidth int) string {
@@ -1234,6 +1283,37 @@ func recipeNameFromPath(path string) string {
 	}
 
 	return base
+}
+
+func panelNoTitle(body string, totalWidth int, totalHeight int) string {
+	if totalWidth < 30 {
+		totalWidth = 30
+	}
+	if totalHeight < 4 {
+		totalHeight = 4
+	}
+
+	contentWidth := totalWidth - 4
+	contentHeight := totalHeight - 2
+
+	if contentWidth < 10 {
+		contentWidth = 10
+	}
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+
+	body = fitPanelBody(body, contentHeight)
+
+	return lipgloss.NewStyle().
+		Width(contentWidth).
+		Height(contentHeight).
+		Background(colorBg1).
+		Foreground(colorText).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorBorder).
+		Padding(0, 1).
+		Render(body)
 }
 
 func panel(title string, body string, totalWidth int, totalHeight int) string {
