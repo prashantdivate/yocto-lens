@@ -1,13 +1,13 @@
 
 <p align="center">
-  <img src="docs/images/logo.png" alt="Yocto Lens Logo" width="220">
+  <picture>
+    <!-- Logo displayed to Dark Mode users -->
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.png">
+    <!-- Default Logo displayed to Light Mode users -->
+    <img src="docs/images/logo.png" alt="Yocto Lens Logo" width="100%" style="max-width: 920px;">
+  </picture>
 </p>
 
-<h1 align="center">Yocto Lens</h1>
-
-<p align="center">
-  <strong>Static Analysis, Style Review & Recipe Health Auditing for Yocto/OpenEmbedded Metadata</strong>
-</p>
 
 <p align="center">
 
@@ -36,16 +36,9 @@
 
 </p>
 
-<p align="center">
+<br>
 
-  <a href="#features">Features</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#Usage-about-release">Usage</a> •
-
-</p>
-
-
-`yocto-lens` is a fast terminal-based static analysis and style review tool for Yocto / OpenEmbedded layers.
+`yocto-lens` is a fast terminal-based Static Analysis, Style Review & Recipe Health Auditing for Yocto/OpenEmbedded layers.
 
 Yocto Lens helps embedded Linux developers identify security risks, maintainability issues, layer dependency problems, patch quality concerns, and metadata style violations before they become build or release issues.
 
@@ -147,7 +140,7 @@ Use:
 
 ```text
 tab  toggle mode
-m    toggle mode
+s    toggle mode
 ```
 
 The current mode is shown in the header:
@@ -190,6 +183,24 @@ Scan multiple layers:
 
 `yocto-lens meta-custom meta-product meta-security`
 
+Run without TUI:
+
+```bash
+yocto-lens --no-tui /path/to/meta-custom
+```
+
+Run only static-analysis findings in console mode:
+
+```bash
+yocto-lens --no-tui --mode static /path/to/meta-custom
+```
+
+Run only style-check findings in console mode:
+
+```bash
+yocto-lens --no-tui --mode style /path/to/meta-custom
+```
+
 Export JSON:
 
 `yocto-lens <path_to_yocto_layer> --json report.json`
@@ -197,50 +208,6 @@ Export JSON:
 Export SARIF:
 
 `yocto-lens <path_to_yocto_layer> --sarif report.sarif`
-
-## Usage about repo
-
-Scan a single Yocto layer:
-
-```bash
-go run ./cmd/yocto-lens /path/to/meta-custom
-```
-
-Scan a workspace containing many Yocto layers:
-
-```bash
-go run ./cmd/yocto-lens /path/to/yocto-workspace
-```
-
-Scan multiple explicit layers:
-
-```bash
-go run ./cmd/yocto-lens /path/to/meta-board /path/to/meta-product
-```
-
-Run without TUI:
-
-```bash
-go run ./cmd/yocto-lens --no-tui /path/to/meta-custom
-```
-
-Run only static-analysis findings in console mode:
-
-```bash
-go run ./cmd/yocto-lens --no-tui --mode static /path/to/meta-custom
-```
-
-Run only style-check findings in console mode:
-
-```bash
-go run ./cmd/yocto-lens --no-tui --mode style /path/to/meta-custom
-```
-
-Export JSON and SARIF:
-
-```bash
-go run ./cmd/yocto-lens --no-tui --json report.json --sarif report.sarif /path/to/meta-custom
-```
 
 ---
 
