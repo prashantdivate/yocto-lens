@@ -7,8 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/term"
 
 	"github.com/example/yocto-lens/internal/analyzer"
 	"github.com/example/yocto-lens/internal/model"
@@ -19,7 +22,6 @@ func main() {
 	jsonPath := flag.String("json", "", "write JSON report to file")
 	sarifPath := flag.String("sarif", "", "write SARIF report to file")
 	noTUI := flag.Bool("no-tui", false, "disable TUI and print console output")
-	mode := flag.String("mode", "all", "finding mode for console/export: all, static, or style")
 	flag.Parse()
 
 	paths := flag.Args()
@@ -42,14 +44,9 @@ func main() {
 			)
 		})
 		fmt.Println()
+
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "analysis failed: %v\n", err)
-			os.Exit(1)
-		}
-
-		report, err = filterReportByMode(report, *mode)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid mode: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -61,6 +58,8 @@ func main() {
 		printSummary(report)
 		return
 	}
+
+	showSplash(paths)
 
 	program := tea.NewProgram(
 		tui.NewLoading(paths),
@@ -78,11 +77,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "analysis failed during export: %v\n", err)
 			os.Exit(1)
 		}
-		report, err = filterReportByMode(report, *mode)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid mode: %v\n", err)
-			os.Exit(1)
-		}
+
 		if err := writeOutputs(report, *jsonPath, *sarifPath); err != nil {
 			fmt.Fprintf(os.Stderr, "export failed: %v\n", err)
 			os.Exit(1)
@@ -90,41 +85,178 @@ func main() {
 	}
 }
 
-func filterReportByMode(report model.Report, mode string) (model.Report, error) {
-	mode = strings.ToLower(strings.TrimSpace(mode))
-	if mode == "" {
-		mode = "all"
+func showSplash(paths []string) {
+	width, height := terminalSize()
+
+	gold := lipgloss.Color("#d8a657")
+	green := lipgloss.Color("#a9b665")
+	cream := lipgloss.Color("#d4be98")
+	muted := lipgloss.Color("#928374")
+	bg := lipgloss.Color("#1d2021")
+	border := lipgloss.Color("#504945")
+
+	titleStyle := lipgloss.NewStyle().
+		Foreground(gold).
+		Background(bg).
+		Bold(true)
+
+	subtitleStyle := lipgloss.NewStyle().
+		Foreground(cream).
+		Background(bg)
+
+	accentStyle := lipgloss.NewStyle().
+		Foreground(green).
+		Background(bg).
+		Bold(true)
+
+	mutedStyle := lipgloss.NewStyle().
+		Foreground(muted).
+		Background(bg)
+
+	boxWidth := responsiveSplashWidth(width)
+
+	workspace := strings.Join(paths, ", ")
+	if workspace == "" {
+		workspace = "."
 	}
 
-	switch mode {
-	case "all":
-		return report, nil
-	case "static", "static-analysis", "analysis":
-		filtered := make([]model.Finding, 0, len(report.Findings))
-		for _, finding := range report.Findings {
-			if !isStyleFinding(finding) {
-				filtered = append(filtered, finding)
-			}
-		}
-		report.Findings = filtered
-		return report, nil
-	case "style", "style-check":
-		filtered := make([]model.Finding, 0, len(report.Findings))
-		for _, finding := range report.Findings {
-			if isStyleFinding(finding) {
-				filtered = append(filtered, finding)
-			}
-		}
-		report.Findings = filtered
-		return report, nil
-	default:
-		return report, fmt.Errorf("%q, expected all, static, or style", mode)
+	steps := []string{
+		"Loading analyzers...",
+		"Discovering Yocto layers...",
+		"Preparing metadata scanner...",
+		"Starting dashboard...",
 	}
+
+	for i, step := range steps {
+		clearScreen()
+
+		progress := (i + 1) * 100 / len(steps)
+		barWidth := responsiveBarWidth(boxWidth)
+
+		body := lipgloss.JoinVertical(
+			lipgloss.Center,
+			"",
+            titleStyle.Render(">>> YOCTO LENS <<<"),
+			"",
+			subtitleStyle.Render("Static Analysis & Style Review"),
+			subtitleStyle.Render("for Yocto/OpenEmbedded Metadata"),
+			"",
+			accentStyle.Render("Catch Issues Early • Build Better"),
+			"",
+			progressBar(progress, barWidth),
+			"",
+			mutedStyle.Render(step),
+			mutedStyle.Render("Workspace: "+truncatePlain(workspace, boxWidth-18)),
+			"",
+		)
+
+		box := lipgloss.NewStyle().
+			Width(boxWidth).
+			Align(lipgloss.Center).
+			Background(bg).
+			Foreground(cream).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(border).
+			Padding(1, 2).
+			Render(body)
+
+		screen := lipgloss.Place(
+			width,
+			height,
+			lipgloss.Center,
+			lipgloss.Center,
+			box,
+		)
+
+		fmt.Print(screen)
+		time.Sleep(420 * time.Millisecond)
+	}
+
+	time.Sleep(250 * time.Millisecond)
+	clearScreen()
 }
 
-func isStyleFinding(f model.Finding) bool {
-	rule := strings.ToLower(f.RuleID)
-	return strings.HasPrefix(rule, "style/") || strings.HasPrefix(rule, "style-")
+func responsiveSplashWidth(terminalWidth int) int {
+	if terminalWidth <= 0 {
+		return 64
+	}
+
+	maxWidth := 72
+	minWidth := 44
+
+	width := terminalWidth * 55 / 100
+
+	if width > maxWidth {
+		width = maxWidth
+	}
+
+	if width < minWidth {
+		width = minWidth
+	}
+
+	if terminalWidth < width+4 {
+		width = terminalWidth - 4
+	}
+
+	if width < 32 {
+		width = 32
+	}
+
+	return width
+}
+
+func responsiveBarWidth(boxWidth int) int {
+	barWidth := boxWidth - 24
+
+	if barWidth > 40 {
+		barWidth = 40
+	}
+
+	if barWidth < 18 {
+		barWidth = 18
+	}
+
+	return barWidth
+}
+
+func progressBar(percent int, width int) string {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+
+	filled := percent * width / 100
+	empty := width - filled
+
+	green := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#a9b665")).
+		Render(strings.Repeat("█", filled))
+
+	gray := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#3c3836")).
+		Render(strings.Repeat("░", empty))
+
+	text := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#d8a657")).
+		Bold(true).
+		Render(fmt.Sprintf(" %3d%%", percent))
+
+	return "[" + green + gray + "]" + text
+}
+
+func terminalSize() (int, int) {
+	width, height, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || width <= 0 || height <= 0 {
+		return 120, 36
+	}
+
+	return width, height
+}
+
+func clearScreen() {
+	fmt.Print("\033[2J\033[H")
 }
 
 func writeOutputs(report model.Report, jsonPath string, sarifPath string) error {
@@ -133,11 +265,13 @@ func writeOutputs(report model.Report, jsonPath string, sarifPath string) error 
 			return err
 		}
 	}
+
 	if sarifPath != "" {
 		if err := writeSARIF(report, sarifPath); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -145,10 +279,12 @@ func writeJSON(report model.Report, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil && filepath.Dir(path) != "." {
 		return err
 	}
+
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return err
 	}
+
 	return os.WriteFile(path, data, 0644)
 }
 
@@ -209,7 +345,7 @@ func writeSARIF(report model.Report, path string) error {
 				"tool": map[string]any{
 					"driver": map[string]any{
 						"name":           "yocto-lens",
-						"informationUri": "https://github.com/example/yocto-lens",
+						"informationUri": "https://github.com/prashantdivate/yocto-lens",
 						"rules":          rules,
 					},
 				},
@@ -222,6 +358,7 @@ func writeSARIF(report model.Report, path string) error {
 	if err != nil {
 		return err
 	}
+
 	return os.WriteFile(path, data, 0644)
 }
 
@@ -238,6 +375,7 @@ func sarifLevel(sev model.Severity) string {
 
 func printSummary(report model.Report) {
 	high, medium, low := 0, 0, 0
+
 	for _, finding := range report.Findings {
 		switch finding.Severity {
 		case model.SeverityCritical, model.SeverityHigh:
@@ -263,10 +401,12 @@ func compactConsolePath(path string, max int) string {
 	if max < 12 {
 		max = 12
 	}
+
 	clean := filepath.ToSlash(path)
 	if len(clean) <= max {
 		return clean
 	}
+
 	parts := strings.Split(clean, "/")
 	if len(parts) >= 3 {
 		tail := strings.Join(parts[len(parts)-3:], "/")
@@ -275,5 +415,23 @@ func compactConsolePath(path string, max int) string {
 			return out
 		}
 	}
+
 	return "..." + clean[len(clean)-max+3:]
+}
+
+func truncatePlain(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+
+	if max <= 1 {
+		return "…"
+	}
+
+	return string(runes[:max-1]) + "…"
 }
