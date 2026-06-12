@@ -271,7 +271,7 @@ func isInterestingFile(path string) bool {
 }
 
 func parseRecipe(path string, layer model.Layer) (model.Recipe, error) {
-	lines, vars, err := parseMetadataFile(path)
+	lines, vars, err := parseMetadataFileWithIncludes(path, layer.Path)
 	if err != nil {
 		return model.Recipe{}, err
 	}
@@ -304,7 +304,7 @@ func parseRecipe(path string, layer model.Layer) (model.Recipe, error) {
 }
 
 func parseAppend(path string, layer model.Layer) (model.Append, error) {
-	lines, vars, err := parseMetadataFile(path)
+	lines, vars, err := parseMetadataFileWithIncludes(path, layer.Path)
 	if err != nil {
 		return model.Append{}, err
 	}
@@ -332,6 +332,170 @@ func parsePatch(path string, layer model.Layer) (model.Patch, error) {
 		Layer: layer.Name,
 		Lines: lines,
 	}, nil
+}
+
+func parseMetadataFileWithIncludes(path string, layerRoot string) ([]string, map[string]string, error) {
+	return parseMetadataFileWithIncludesSeen(path, layerRoot, map[string]bool{})
+}
+
+func parseMetadataFileWithIncludesSeen(path string, layerRoot string, seen map[string]bool) ([]string, map[string]string, error) {
+	cleanPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if seen[cleanPath] {
+		return []string{}, map[string]string{}, nil
+	}
+	seen[cleanPath] = true
+
+	lines, vars, err := parseMetadataFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	fileLines, readErr := readLines(path)
+	if readErr != nil {
+		return lines, vars, nil
+	}
+
+	for _, line := range fileLines {
+		includePath, ok := parseIncludeDirective(line)
+		if !ok {
+			continue
+		}
+
+		resolved, ok := resolveIncludePath(includePath, path, layerRoot, vars)
+		if !ok {
+			continue
+		}
+
+		includeLines, includeVars, includeErr := parseMetadataFileWithIncludesSeen(resolved, layerRoot, seen)
+		if includeErr != nil {
+			continue
+		}
+
+		lines = append(includeLines, lines...)
+		mergeVars(vars, includeVars)
+	}
+
+	return lines, vars, nil
+}
+
+func readLines(path string) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	return lines, scanner.Err()
+}
+
+func parseIncludeDirective(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return "", false
+	}
+
+	fields := strings.Fields(trimmed)
+	if len(fields) < 2 {
+		return "", false
+	}
+
+	if fields[0] != "include" && fields[0] != "require" {
+		return "", false
+	}
+
+	includePath := strings.Trim(fields[1], "\"'")
+	includePath = strings.TrimSpace(includePath)
+
+	if includePath == "" {
+		return "", false
+	}
+
+	return includePath, true
+}
+
+func resolveIncludePath(includePath string, currentFile string, layerRoot string, vars map[string]string) (string, bool) {
+	includePath = expandSimpleVars(includePath, vars)
+
+	if filepath.IsAbs(includePath) {
+		if fileExists(includePath) {
+			return includePath, true
+		}
+		return "", false
+	}
+
+	candidates := []string{
+		filepath.Join(filepath.Dir(currentFile), includePath),
+		filepath.Join(layerRoot, includePath),
+		filepath.Join(layerRoot, "recipes-core", includePath),
+		filepath.Join(layerRoot, "recipes-bsp", includePath),
+		filepath.Join(layerRoot, "recipes-kernel", includePath),
+		filepath.Join(layerRoot, "recipes-app", includePath),
+		filepath.Join(layerRoot, "recipes-support", includePath),
+	}
+
+	for _, candidate := range candidates {
+		if fileExists(candidate) {
+			return candidate, true
+		}
+	}
+
+	base := filepath.Base(includePath)
+	found := ""
+
+	_ = filepath.WalkDir(layerRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+
+		if filepath.Base(path) == base {
+			found = path
+			return filepath.SkipAll
+		}
+
+		return nil
+	})
+
+	if found != "" {
+		return found, true
+	}
+
+	return "", false
+}
+
+func expandSimpleVars(value string, vars map[string]string) string {
+	for key, val := range vars {
+		value = strings.ReplaceAll(value, "${"+key+"}", val)
+	}
+
+	return value
+}
+
+func mergeVars(target map[string]string, source map[string]string) {
+	for key, value := range source {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+
+		if _, exists := target[key]; !exists {
+			target[key] = value
+		}
+	}
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func parseMetadataFile(path string) ([]string, map[string]string, error) {
@@ -1695,8 +1859,39 @@ func checkLicenseChecksumReferences(recipe model.Recipe, licChecksum string) []m
 
 	entries := strings.Fields(licChecksum)
 	for _, entry := range entries {
-		if !strings.HasPrefix(entry, "file://") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
 			continue
+		}
+
+		if !strings.HasPrefix(entry, "file://") {
+			findings = append(findings, finding(
+				"static/license-invalid-reference",
+				"Invalid LIC_FILES_CHKSUM reference",
+				model.SeverityLow,
+				recipe.Layer,
+				recipe.Path,
+				findLine(recipe.Lines, "LIC_FILES_CHKSUM"),
+				fmt.Sprintf("LIC_FILES_CHKSUM entry %q does not use a file:// reference.", entry),
+				"Yocto license checksum entries normally reference files with file:// paths and checksum parameters.",
+				"Use LIC_FILES_CHKSUM entries such as file://COPYING;md5=<checksum>.",
+			))
+			continue
+		}
+
+		if !strings.Contains(entry, ";md5=") &&
+			!strings.Contains(entry, ";sha256=") {
+			findings = append(findings, finding(
+				"static/license-missing-checksum",
+				"LIC_FILES_CHKSUM entry missing checksum",
+				model.SeverityMedium,
+				recipe.Layer,
+				recipe.Path,
+				findLine(recipe.Lines, "LIC_FILES_CHKSUM"),
+				fmt.Sprintf("LIC_FILES_CHKSUM entry %q does not include md5 or sha256.", entry),
+				"Yocto uses the checksum to detect upstream license text changes during builds.",
+				"Add a checksum parameter, for example file://COPYING;md5=<checksum>.",
+			))
 		}
 
 		pathPart := strings.TrimPrefix(entry, "file://")
@@ -1704,22 +1899,17 @@ func checkLicenseChecksumReferences(recipe model.Recipe, licChecksum string) []m
 			pathPart = pathPart[:idx]
 		}
 
-		if pathPart == "" {
-			continue
-		}
-
-		candidate := filepath.Join(filepath.Dir(recipe.Path), pathPart)
-		if _, err := os.Stat(candidate); err != nil {
+		if strings.TrimSpace(pathPart) == "" {
 			findings = append(findings, finding(
-				"static/license-file-reference-missing",
-				"LIC_FILES_CHKSUM file not found",
+				"static/license-empty-file-reference",
+				"Empty LIC_FILES_CHKSUM file reference",
 				model.SeverityMedium,
 				recipe.Layer,
 				recipe.Path,
 				findLine(recipe.Lines, "LIC_FILES_CHKSUM"),
-				fmt.Sprintf("LIC_FILES_CHKSUM references %q, but that file was not found next to the recipe.", pathPart),
-				"Broken license file references can fail builds or hide license text changes.",
-				"Verify the file path, or point LIC_FILES_CHKSUM to the correct license file under the unpacked source tree.",
+				"LIC_FILES_CHKSUM contains an empty file:// reference.",
+				"Empty license file references cannot be validated by BitBake.",
+				"Point LIC_FILES_CHKSUM to a real license file, such as file://COPYING;md5=<checksum>.",
 			))
 		}
 	}
