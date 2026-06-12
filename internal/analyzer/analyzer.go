@@ -597,7 +597,7 @@ func checkLayerBasics(layer model.Layer) []model.Finding {
 		return findings
 	}
 
-	if !hasVar(vars, "LAYERSERIES_COMPAT") {
+	if !hasLayerSeriesCompat(vars) {
 		findings = append(findings, finding(
 			"static/layer-missing-series-compat",
 			"Layer missing LAYERSERIES_COMPAT",
@@ -1615,6 +1615,23 @@ func checkDuplicateRecipes(recipes []model.Recipe) []model.Finding {
 	return findings
 }
 
+func hasLayerSeriesCompat(vars map[string]string) bool {
+	for key, value := range vars {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+
+		normalized := strings.ReplaceAll(key, ":", "_")
+
+		if normalized == "LAYERSERIES_COMPAT" ||
+			strings.HasPrefix(normalized, "LAYERSERIES_COMPAT_") {
+			return true
+		}
+	}
+
+	return false
+}
+
 func hasVar(vars map[string]string, key string) bool {
 	v, ok := vars[key]
 	return ok && strings.TrimSpace(v) != ""
@@ -1860,23 +1877,6 @@ func checkLicenseChecksumReferences(recipe model.Recipe, licChecksum string) []m
 	entries := strings.Fields(licChecksum)
 	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
-
-		if strings.Contains(pathPart, "${COMMON_LICENSE_DIR}") {
-			continue
-		}
-
-		if strings.Contains(pathPart, "${COREBASE}") {
-			continue
-		}
-
-		if strings.Contains(pathPart, "${S}") {
-			continue
-		}
-
-		if strings.Contains(pathPart, "${WORKDIR}") {
-			continue
-		}
-
 		if entry == "" {
 			continue
 		}
@@ -1896,6 +1896,15 @@ func checkLicenseChecksumReferences(recipe model.Recipe, licChecksum string) []m
 			continue
 		}
 
+		pathPart := strings.TrimPrefix(entry, "file://")
+
+		if strings.Contains(pathPart, "${COMMON_LICENSE_DIR}") ||
+			strings.Contains(pathPart, "${COREBASE}") ||
+			strings.Contains(pathPart, "${S}") ||
+			strings.Contains(pathPart, "${WORKDIR}") {
+			continue
+		}
+
 		if !strings.Contains(entry, ";md5=") &&
 			!strings.Contains(entry, ";sha256=") {
 			findings = append(findings, finding(
@@ -1911,7 +1920,6 @@ func checkLicenseChecksumReferences(recipe model.Recipe, licChecksum string) []m
 			))
 		}
 
-		pathPart := strings.TrimPrefix(entry, "file://")
 		if idx := strings.Index(pathPart, ";"); idx >= 0 {
 			pathPart = pathPart[:idx]
 		}
