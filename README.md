@@ -153,6 +153,22 @@ Only findings from the active mode are shown in the Findings list and Inspector 
 
 ---
 
+## 📸 Screenshots
+
+### welcome screen
+
+<p align="center">
+  <img src="docs/images/splash.png" width="100%">
+</p>
+
+### Dashboard
+
+<p align="center">
+  <img src="docs/images/dashboard.png" width="100%">
+</p>
+
+---
+
 ## Installation
 
 Download the latest release:
