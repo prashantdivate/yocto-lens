@@ -1,5 +1,49 @@
 
-# Yocto Lens
+<p align="center">
+  <img src="docs/images/logo.png" alt="Yocto Lens Logo" width="220">
+</p>
+
+<h1 align="center">Yocto Lens</h1>
+
+<p align="center">
+  <strong>Static Analysis, Style Review & Recipe Health Auditing for Yocto/OpenEmbedded Metadata</strong>
+</p>
+
+<p align="center">
+
+  <a href="https://github.com/prashantdivate/yocto-lens/actions">
+    <img src="https://img.shields.io/github/actions/workflow/status/prashantdivate/yocto-lens/release.yml?label=build&logo=githubactions" />
+  </a>
+
+  <a href="https://github.com/prashantdivate/yocto-lens/releases">
+    <img src="https://img.shields.io/github/v/release/prashantdivate/yocto-lens?logo=github" />
+  </a>
+
+  <a href="https://github.com/prashantdivate/yocto-lens/stargazers">
+    <img src="https://img.shields.io/github/stars/prashantdivate/yocto-lens?logo=github" />
+  </a>
+
+  <a href="https://github.com/prashantdivate/yocto-lens/network/members">
+    <img src="https://img.shields.io/github/forks/prashantdivate/yocto-lens?logo=github" />
+  </a>
+
+  <a href="LICENSE">
+    <img src="https://img.shields.io/github/license/prashantdivate/yocto-lens" />
+  </a>
+
+  <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go" />
+  <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-success" />
+
+</p>
+
+<p align="center">
+
+  <a href="#features">Features</a> •
+  <a href="#installation">Installation</a> •
+  <a href="#Usage-about-release">Usage</a> •
+
+</p>
+
 
 `yocto-lens` is a fast terminal-based static analysis and style review tool for Yocto / OpenEmbedded layers.
 
@@ -118,21 +162,22 @@ Only findings from the active mode are shown in the Findings list and Inspector 
 
 ## Installation
 
-Download the latest binary from GitHub Releases.
+Download the latest release:
 
-Linux:
+https://github.com/prashantdivate/yocto-lens/releases
 
-`chmod +x yocto-lens
-./yocto-lens <path_to_yocto_layer>`
+Linux / macOS:
 
-macOS:
-
-`chmod +x yocto-lens
-./yocto-lens <path_to_yocto_layer>`
+```bash
+chmod +x yocto-lens
+./yocto-lens <path_to_yocto_layer>
+```
 
 Windows:
 
-`.\yocto-lens.exe <path_to_yocto_layer>`
+```powershell
+.\yocto-lens.exe <path_to_yocto_layer>
+```
 
 ## Usage about release
 
@@ -243,11 +288,13 @@ srcuri
 
 ---
 
-
-## Build
+## 🛠 Build From Source
 
 ```bash
-go mod tidy
+git clone https://github.com/prashantdivate/yocto-lens.git
+
+cd yocto-lens
+
 go build -o yocto-lens ./cmd/yocto-lens
 ```
 
@@ -259,25 +306,58 @@ Run:
 
 ---
 
+## Real World Usage
+
+Yocto Lens is already being used to automate metadata quality checks in Yocto BSP development workflows.
+
+| Project | Usage |
+|----------|--------|
+| Dynamic Devices BSP | CI validation and metadata quality checks |
+
+## Used In CI
+
+Yocto Lens is already being integrated into automated Yocto validation pipelines.
+
+Example:
+
+- Dynamic Devices BSP Layer
+  - https://github.com/DynamicDevices/meta-dynamicdevices-bsp
+
+CI Integration Script:
+
+https://github.com/DynamicDevices/meta-dynamicdevices-bsp/blob/main/scripts/yocto-lens-ci.sh
+
 ## CI Example
 
 ```bash
 ./yocto-lens --no-tui --mode static --json yocto-lens.json --sarif yocto-lens.sarif .
 ```
+---
+
+## 🗺️ Roadmap
+
+* [x] Static Analysis
+* [x] Style Review
+* [x] License Compliance
+* [x] Patch Quality Auditor
+* [x] Recipe Health Scoring
+* [ ] Layer Dependency Graph
+* [ ] License Dashboard
+* [ ] Upgrade Readiness Report
+* [ ] SPDX/SBOM Export
+* [ ] CVE Integration
 
 ---
 
-## Why Yocto Lens?
+## 🤝 Contributing
 
-Most Yocto validation today happens after BitBake starts parsing or building.
+Issues, discussions, feature requests and pull requests are welcome.
 
-Yocto Lens shifts metadata review earlier by providing fast feedback on:
+If Yocto Lens helps your workflow, consider giving the project a ⭐.
 
-* Security
-* Maintainability
-* Layer architecture
-* Patch hygiene
-* License compliance
-* Release readiness
+---
 
-directly from the terminal.
+## 📄 License
+
+MIT License
+
