@@ -28,8 +28,6 @@
   </a>
   <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go" alt="Go Programming Language Version" />
   <img src="https://img.shields.io/badge/OS-Linux%20%7C%20macOS%20%7C%20Windows-ffb6c1" alt="Supported Operating Systems" />
-
-  <br>
   
   <a href="https://github.com/prashantdivate/yocto-lens/stargazers">
     <img src="https://img.shields.io/github/stars/prashantdivate/yocto-lens?logo=github" alt="GitHub Stars">
@@ -44,7 +42,7 @@
 
 <br>
 
-# Yocto Lens — BitBake Linter & Static Analysis Tool for Yocto Projects
+# Yocto Lens — BitBake Linter & Static Analysis Tool
 
 `yocto-lens` is a lightning-fast, terminal-based **Static Code Analysis, Style Review, and Recipe Health Auditing engine** built specifically for Yocto Project and OpenEmbedded layers.
 
@@ -259,23 +257,11 @@ https://github.com/DynamicDevices/meta-dynamicdevices-bsp/blob/main/scripts/yoct
 ```
 ---
 
-🗺️ Engineering Development RoadmapCore
-* Static Analysis Vulnerability Rules Matrix
-* BitBake Styling & Consistency Syntax Review Rules
-* Comprehensive Embedded Licensing Compliance Framework
-* Upstream Validation Patch Quality Auditor Framework
-* Dynamic Recipe Health Metrics Scoring Leaderboard
-* Interactive Cross-Layer Dependency Topology Map Visualization
-* Global License Matrix Dashboard Analytics
-* Upgrade Readiness Delta Telemetry Diagnostics (Yocto Version Upgrades)
-* SPDX/SBOM Metadata Package Parsing Export Pipelines
-* Real-time Upstream CVE Database Integration Tracking
-
-🤝 Community Contributions
+## 🤝 Community Contributions
 Community feature inquiries, architectural bug tracking reports, and open GitHub Pull Requests are highly encouraged.
 
 If Yocto Lens reduces your code review overhead or hardens your build environments, please consider dropping a project ⭐!
 
-📄 Licensing Rights
+## 📄 Licensing Rights
 This system is licensed entirely under the MIT Open Source License.
 
