@@ -592,7 +592,7 @@ func checkLayerBasics(layer model.Layer) []model.Finding {
 	var findings []model.Finding
 
 	conf := filepath.Join(layer.Path, "conf", "layer.conf")
-	lines, vars, err := parseMetadataFile(conf)
+	lines, vars, err := parseMetadataFileWithIncludes(conf, layer.Path)
 	if err != nil {
 		return findings
 	}
@@ -747,7 +747,7 @@ func buildLayerNodes(layers []model.Layer) []layerNode {
 
 	for _, layer := range layers {
 		conf := filepath.Join(layer.Path, "conf", "layer.conf")
-		_, vars, err := parseMetadataFile(conf)
+		_, vars, err := parseMetadataFileWithIncludes(conf, layer.Path)
 		if err != nil {
 			continue
 		}
@@ -1109,13 +1109,13 @@ func checkAppendStatic(appendFile model.Append, recipes []model.Recipe) []model.
 		findings = append(findings, finding(
 			"static/orphan-bbappend",
 			"Possibly orphaned bbappend",
-			model.SeverityHigh,
+			model.SeverityLow,
 			appendFile.Layer,
 			appendFile.Path,
 			1,
-			"This .bbappend does not match any recipe discovered in the scanned layers.",
-			"Orphan appends are ignored by BitBake or cause layer compatibility problems depending on configuration.",
-			"Check recipe name/version, BBFILES patterns, layer dependencies, and whether the target recipe exists.",
+			"This .bbappend target recipe was not found in the currently scanned layers.",
+			"This may be valid if the target recipe exists in another layer that was not included in the scan.",
+			"Scan the provider layer as well, or verify that the target recipe exists in your build configuration.",
 		))
 	}
 
@@ -1860,6 +1860,23 @@ func checkLicenseChecksumReferences(recipe model.Recipe, licChecksum string) []m
 	entries := strings.Fields(licChecksum)
 	for _, entry := range entries {
 		entry = strings.TrimSpace(entry)
+
+		if strings.Contains(pathPart, "${COMMON_LICENSE_DIR}") {
+			continue
+		}
+
+		if strings.Contains(pathPart, "${COREBASE}") {
+			continue
+		}
+
+		if strings.Contains(pathPart, "${S}") {
+			continue
+		}
+
+		if strings.Contains(pathPart, "${WORKDIR}") {
+			continue
+		}
+
 		if entry == "" {
 			continue
 		}
