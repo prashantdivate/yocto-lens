@@ -189,6 +189,13 @@ Inline suppressions are also supported for intentional exceptions:
 LICENSE = "CLOSED"
 ```
 
+### AI Agent Support:
+This repository includes guidance for both Codex and Claude Code agents:
+
+* `AGENTS.md` provides Codex-compatible project instructions.
+* `CLAUDE.md` provides Claude Code-compatible project instructions.
+* `docs/AI_AGENTS.md` contains the shared Yocto Lens agent skill guide, including official Yocto/BitBake documentation links, rule-writing workflow, false-positive reduction guidance, performance workflow, and verification expectations.
+
 ---
 
 ## Keyboard Shortcuts
