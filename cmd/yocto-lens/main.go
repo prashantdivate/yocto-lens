@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -356,7 +357,18 @@ func writeSARIF(report model.Report, path string) error {
 	rulesByID := map[string]map[string]any{}
 	results := []map[string]any{}
 
-	for _, finding := range report.Findings {
+	findings := append([]model.Finding(nil), report.Findings...)
+	sort.SliceStable(findings, func(i, j int) bool {
+		if findings[i].RuleID != findings[j].RuleID {
+			return findings[i].RuleID < findings[j].RuleID
+		}
+		if findings[i].File != findings[j].File {
+			return findings[i].File < findings[j].File
+		}
+		return findings[i].Line < findings[j].Line
+	})
+
+	for _, finding := range findings {
 		rulesByID[finding.RuleID] = map[string]any{
 			"id":   finding.RuleID,
 			"name": finding.Title,
@@ -381,7 +393,7 @@ func writeSARIF(report model.Report, path string) error {
 				{
 					"physicalLocation": map[string]any{
 						"artifactLocation": map[string]any{
-							"uri": finding.File,
+							"uri": sarifURI(finding.File),
 						},
 						"region": map[string]any{
 							"startLine": finding.Line,
@@ -393,8 +405,13 @@ func writeSARIF(report model.Report, path string) error {
 	}
 
 	rules := []map[string]any{}
-	for _, rule := range rulesByID {
-		rules = append(rules, rule)
+	ruleIDs := make([]string, 0, len(rulesByID))
+	for ruleID := range rulesByID {
+		ruleIDs = append(ruleIDs, ruleID)
+	}
+	sort.Strings(ruleIDs)
+	for _, ruleID := range ruleIDs {
+		rules = append(rules, rulesByID[ruleID])
 	}
 
 	doc := map[string]any{
@@ -431,6 +448,25 @@ func sarifLevel(sev model.Severity) string {
 	default:
 		return "note"
 	}
+}
+
+func sarifURI(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		return filepath.ToSlash(abs)
+	}
+
+	rel, err := filepath.Rel(wd, abs)
+	if err == nil && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel) {
+		return filepath.ToSlash(rel)
+	}
+
+	return filepath.ToSlash(abs)
 }
 
 func printSummary(report model.Report) {
