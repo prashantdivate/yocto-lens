@@ -216,6 +216,30 @@ func TestCheckPatchReferences(t *testing.T) {
 	}
 }
 
+func TestAnalyzeChecksTargetReleaseCompatibility(t *testing.T) {
+	root := t.TempDir()
+	layer := filepath.Join(root, "meta-test")
+
+	writeTestFile(t, filepath.Join(root, ".yocto-lens.json"), `{
+  "target_release": "walnascar"
+}
+`)
+	writeTestFile(t, filepath.Join(layer, "conf", "layer.conf"), `BBFILE_COLLECTIONS = "test"
+LAYERSERIES_COMPAT_test = "scarthgap"
+BBFILE_PATTERN_test = "^${LAYERDIR}/"
+BBFILE_PRIORITY_test = "6"
+`)
+
+	report, err := Analyze([]string{root})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+
+	if !hasFinding(report.Findings, "static/layer-target-release-incompatible", filepath.Join(layer, "conf", "layer.conf")) {
+		t.Fatal("did not find target release compatibility finding")
+	}
+}
+
 func hasFinding(findings []model.Finding, ruleID string, path string) bool {
 	for _, finding := range findings {
 		if finding.RuleID == ruleID && finding.File == path {

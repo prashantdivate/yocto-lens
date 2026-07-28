@@ -936,6 +936,7 @@ func runAllRules(report model.Report) []model.Finding {
 
 	for _, layer := range report.Layers {
 		findings = append(findings, checkLayerBasics(layer)...)
+		findings = append(findings, checkLayerTargetRelease(layer, report.TargetRelease)...)
 	}
 
 	for _, recipe := range report.Recipes {
@@ -1005,6 +1006,36 @@ func checkLayerBasics(layer model.Layer) []model.Finding {
 	findings = append(findings, checkLinesStyle(conf, layer.Name, lines)...)
 
 	return findings
+}
+
+func checkLayerTargetRelease(layer model.Layer, targetRelease string) []model.Finding {
+	targetRelease = strings.TrimSpace(targetRelease)
+	if targetRelease == "" {
+		return nil
+	}
+
+	conf := filepath.Join(layer.Path, "conf", "layer.conf")
+	lines, vars, err := parseMetadataFileWithIncludes(conf, layer.Path)
+	if err != nil {
+		return nil
+	}
+
+	series := layerSeries(vars, layerCollections(layer, vars))
+	if len(series) == 0 || containsString(series, targetRelease) {
+		return nil
+	}
+
+	return []model.Finding{finding(
+		"static/layer-target-release-incompatible",
+		"Layer may not support target release",
+		model.SeverityHigh,
+		layer.Name,
+		conf,
+		findLine(lines, "LAYERSERIES_COMPAT"),
+		fmt.Sprintf("Layer declares LAYERSERIES_COMPAT values %q, but target release is %q.", strings.Join(series, " "), targetRelease),
+		"Scanning against the intended Yocto release catches layer compatibility drift before BitBake parse or CI integration failures.",
+		"Add the target release to LAYERSERIES_COMPAT after validating compatibility, or scan with the correct target_release.",
+	)}
 }
 
 type layerNode struct {
@@ -2366,6 +2397,16 @@ func uniqueStrings(values []string) []string {
 
 	sort.Strings(out)
 	return out
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+
+	return false
 }
 
 func emit(progress ProgressFunc, p model.ScanProgress) {
