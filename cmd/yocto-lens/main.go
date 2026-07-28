@@ -197,7 +197,7 @@ func showSplash(paths []string) {
 		body := lipgloss.JoinVertical(
 			lipgloss.Center,
 			"",
-            titleStyle.Render(">>> YOCTO LENS <<<"),
+			titleStyle.Render(">>> YOCTO LENS <<<"),
 			"",
 			subtitleStyle.Render("Static Analysis & Style Review"),
 			subtitleStyle.Render("for Yocto/OpenEmbedded Metadata"),

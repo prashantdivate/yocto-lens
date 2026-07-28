@@ -761,12 +761,12 @@ func (a App) detailView() string {
 
 func (a App) header(w int) string {
 
-    bannerLines := []string{
-    " \\ \\   /             |               |                    ",
-    "  \\   /  _ \\    __|  __|   _ \\       |   _ \\  __ \\    __| ",
-    "     |  (   |  (     |    (   |      |   __/  |   | \\__ \\ ",
-    "    _| \\___/  \\___| \\__| \\___/      _| \\___| _|  _| ____/ ",
-    }
+	bannerLines := []string{
+		" \\ \\   /             |               |                    ",
+		"  \\   /  _ \\    __|  __|   _ \\       |   _ \\  __ \\    __| ",
+		"     |  (   |  (     |    (   |      |   __/  |   | \\__ \\ ",
+		"    _| \\___/  \\___| \\__| \\___/      _| \\___| _|  _| ____/ ",
+	}
 
 	banner := strings.Join(bannerLines, "\n")
 
@@ -789,7 +789,7 @@ func (a App) header(w int) string {
 		Foreground(colorMuted).
 		Background(colorBg1).
 		Italic(true).
-        MarginTop(1). // add one blank line
+		MarginTop(1). // add one blank line
 		Render("Static Analysis • Style Review • Recipe Health")
 
 	body := lipgloss.JoinVertical(
@@ -799,7 +799,7 @@ func (a App) header(w int) string {
 	)
 
 	return lipgloss.NewStyle().
-		Width(w - 4).
+		Width(w-4).
 		Background(colorBg1).
 		Foreground(colorText).
 		Border(lipgloss.RoundedBorder()).

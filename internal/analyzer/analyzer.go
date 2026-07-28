@@ -67,14 +67,14 @@ type parseJob struct {
 }
 
 type parseResult struct {
-	Index  int
-	Path   string
-	Kind   parsedFileKind
-	Recipe model.Recipe
-	Append model.Append
-	Patch  model.Patch
+	Index    int
+	Path     string
+	Kind     parsedFileKind
+	Recipe   model.Recipe
+	Append   model.Append
+	Patch    model.Patch
 	Metadata model.MetadataFile
-	Err    error
+	Err      error
 }
 
 type layerFileIndex map[string][]string

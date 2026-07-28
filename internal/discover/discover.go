@@ -23,11 +23,18 @@ func LayersFromInputs(inputs []string) ([]model.Layer, error) {
 	var layers []model.Layer
 	for _, input := range inputs {
 		abs, err := filepath.Abs(input)
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		found, err := discoverUnder(abs)
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		for _, l := range found {
-			if !seen[l.Path] { seen[l.Path] = true; layers = append(layers, l) }
+			if !seen[l.Path] {
+				seen[l.Path] = true
+				layers = append(layers, l)
+			}
 		}
 	}
 	return layers, nil
@@ -35,22 +42,36 @@ func LayersFromInputs(inputs []string) ([]model.Layer, error) {
 
 func discoverUnder(root string) ([]model.Layer, error) {
 	info, err := os.Stat(root)
-	if err != nil { return nil, err }
-	if !info.IsDir() { root = filepath.Dir(root) }
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		root = filepath.Dir(root)
+	}
 	if isLayer(root) {
 		l, err := parseLayer(root)
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		return []model.Layer{l}, nil
 	}
 	var layers []model.Layer
 	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil { return nil }
-		if !d.IsDir() { return nil }
+		if err != nil {
+			return nil
+		}
+		if !d.IsDir() {
+			return nil
+		}
 		name := d.Name()
-		if skipDirs[name] { return filepath.SkipDir }
+		if skipDirs[name] {
+			return filepath.SkipDir
+		}
 		if isLayer(path) {
 			l, err := parseLayer(path)
-			if err == nil { layers = append(layers, l) }
+			if err == nil {
+				layers = append(layers, l)
+			}
 			return filepath.SkipDir
 		}
 		return nil
@@ -66,14 +87,20 @@ func isLayer(path string) bool {
 func parseLayer(path string) (model.Layer, error) {
 	l := model.Layer{Name: filepath.Base(path), Path: path}
 	file, err := os.Open(filepath.Join(path, "conf", "layer.conf"))
-	if err != nil { return l, err }
+	if err != nil {
+		return l, err
+	}
 	defer file.Close()
 	s := bufio.NewScanner(file)
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())
-		if strings.HasPrefix(line, "#") { continue }
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
 		m := assign.FindStringSubmatch(line)
-		if len(m) != 4 { continue }
+		if len(m) != 4 {
+			continue
+		}
 		key, val := m[1], m[3]
 		switch {
 		case strings.HasPrefix(key, "BBFILE_COLLECTIONS"):
