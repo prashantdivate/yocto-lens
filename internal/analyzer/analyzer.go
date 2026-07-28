@@ -78,6 +78,16 @@ type parseResult struct {
 
 type layerFileIndex map[string][]string
 
+type metadataParseCache struct {
+	files sync.Map
+}
+
+type metadataParseEntry struct {
+	Lines []string
+	Vars  map[string]string
+	Err   error
+}
+
 type analyzerConfig struct {
 	Exclude       []string                  `json:"exclude"`
 	DisabledRules []string                  `json:"disabled_rules"`
@@ -123,6 +133,7 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 	report.Layers = layers
 
 	filesProcessed := 0
+	parseCache := &metadataParseCache{}
 
 	for _, layer := range layers {
 		emit(progress, model.ScanProgress{
@@ -136,7 +147,7 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 			FindingsFound:  len(report.Findings),
 		})
 
-		if err := parseLayerFiles(layer, &report, &filesProcessed, progress, cfg); err != nil {
+		if err := parseLayerFiles(layer, &report, &filesProcessed, progress, cfg, parseCache); err != nil {
 			return report, err
 		}
 	}
@@ -152,7 +163,7 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 		FindingsFound:  len(report.Findings),
 	})
 
-	report.Findings = applySuppressions(applyAnalyzerConfig(runAllRules(report), cfg))
+	report.Findings = applySuppressions(applyAnalyzerConfig(runAllRules(report, parseCache), cfg))
 
 	sort.SliceStable(report.Findings, func(i, j int) bool {
 		if severityRank(report.Findings[i].Severity) == severityRank(report.Findings[j].Severity) {
@@ -176,7 +187,7 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 	return report, nil
 }
 
-func parseLayerFiles(layer model.Layer, report *model.Report, filesProcessed *int, progress ProgressFunc, cfg analyzerConfig) error {
+func parseLayerFiles(layer model.Layer, report *model.Report, filesProcessed *int, progress ProgressFunc, cfg analyzerConfig, parseCache *metadataParseCache) error {
 	jobs, fileIndex, err := collectParseJobs(layer, cfg)
 	if err != nil {
 		return err
@@ -189,7 +200,7 @@ func parseLayerFiles(layer model.Layer, report *model.Report, filesProcessed *in
 	parsedAppends := 0
 	parsedPatches := 0
 
-	results := parseFilesConcurrently(jobs, fileIndex, func(result parseResult) {
+	results := parseFilesConcurrently(jobs, fileIndex, parseCache, func(result parseResult) {
 		*filesProcessed++
 
 		if result.Err == nil {
@@ -308,7 +319,7 @@ func (idx layerFileIndex) findBase(base string) (string, bool) {
 	return matches[0], true
 }
 
-func parseFilesConcurrently(jobs []parseJob, fileIndex layerFileIndex, onResult func(parseResult)) []parseResult {
+func parseFilesConcurrently(jobs []parseJob, fileIndex layerFileIndex, parseCache *metadataParseCache, onResult func(parseResult)) []parseResult {
 	results := make(chan parseResult, len(jobs))
 	jobCh := make(chan parseJob)
 
@@ -319,7 +330,7 @@ func parseFilesConcurrently(jobs []parseJob, fileIndex layerFileIndex, onResult 
 		go func() {
 			defer wg.Done()
 			for job := range jobCh {
-				results <- parseInterestingFile(job, fileIndex)
+				results <- parseInterestingFile(job, fileIndex, parseCache)
 			}
 		}()
 	}
@@ -363,7 +374,7 @@ func parseWorkerCount(jobCount int) int {
 	return workers
 }
 
-func parseInterestingFile(job parseJob, fileIndex layerFileIndex) parseResult {
+func parseInterestingFile(job parseJob, fileIndex layerFileIndex, parseCache *metadataParseCache) parseResult {
 	result := parseResult{
 		Index: job.Index,
 		Path:  job.Path,
@@ -371,25 +382,25 @@ func parseInterestingFile(job parseJob, fileIndex layerFileIndex) parseResult {
 
 	switch {
 	case strings.HasSuffix(job.Path, ".bb"):
-		recipe, err := parseRecipeWithIndex(job.Path, job.Layer, fileIndex)
+		recipe, err := parseRecipeWithContext(job.Path, job.Layer, fileIndex, parseCache)
 		result.Kind = parsedRecipe
 		result.Recipe = recipe
 		result.Err = err
 
 	case strings.HasSuffix(job.Path, ".bbappend"):
-		appendFile, err := parseAppendWithIndex(job.Path, job.Layer, fileIndex)
+		appendFile, err := parseAppendWithContext(job.Path, job.Layer, fileIndex, parseCache)
 		result.Kind = parsedAppend
 		result.Append = appendFile
 		result.Err = err
 
 	case strings.HasSuffix(job.Path, ".patch"):
-		patch, err := parsePatch(job.Path, job.Layer)
+		patch, err := parsePatchWithCache(job.Path, job.Layer, parseCache)
 		result.Kind = parsedPatch
 		result.Patch = patch
 		result.Err = err
 
 	case strings.HasSuffix(job.Path, ".inc") || strings.HasSuffix(job.Path, ".bbclass"):
-		metadataFile, err := parseMetadataSupportFile(job.Path, job.Layer)
+		metadataFile, err := parseMetadataSupportFileWithCache(job.Path, job.Layer, parseCache)
 		result.Kind = parsedMetadata
 		result.Metadata = metadataFile
 		result.Err = err
@@ -668,7 +679,11 @@ func parseRecipe(path string, layer model.Layer) (model.Recipe, error) {
 }
 
 func parseRecipeWithIndex(path string, layer model.Layer, fileIndex layerFileIndex) (model.Recipe, error) {
-	lines, vars, err := parseMetadataFileWithIncludesIndexed(path, layer.Path, fileIndex)
+	return parseRecipeWithContext(path, layer, fileIndex, nil)
+}
+
+func parseRecipeWithContext(path string, layer model.Layer, fileIndex layerFileIndex, parseCache *metadataParseCache) (model.Recipe, error) {
+	lines, vars, err := parseMetadataFileWithIncludesCached(path, layer.Path, fileIndex, parseCache)
 	if err != nil {
 		return model.Recipe{}, err
 	}
@@ -705,7 +720,11 @@ func parseAppend(path string, layer model.Layer) (model.Append, error) {
 }
 
 func parseAppendWithIndex(path string, layer model.Layer, fileIndex layerFileIndex) (model.Append, error) {
-	lines, vars, err := parseMetadataFileWithIncludesIndexed(path, layer.Path, fileIndex)
+	return parseAppendWithContext(path, layer, fileIndex, nil)
+}
+
+func parseAppendWithContext(path string, layer model.Layer, fileIndex layerFileIndex, parseCache *metadataParseCache) (model.Append, error) {
+	lines, vars, err := parseMetadataFileWithIncludesCached(path, layer.Path, fileIndex, parseCache)
 	if err != nil {
 		return model.Append{}, err
 	}
@@ -723,7 +742,11 @@ func parseAppendWithIndex(path string, layer model.Layer, fileIndex layerFileInd
 }
 
 func parsePatch(path string, layer model.Layer) (model.Patch, error) {
-	lines, _, err := parseMetadataFile(path)
+	return parsePatchWithCache(path, layer, nil)
+}
+
+func parsePatchWithCache(path string, layer model.Layer, parseCache *metadataParseCache) (model.Patch, error) {
+	lines, _, err := parseMetadataFileCached(path, parseCache)
 	if err != nil {
 		return model.Patch{}, err
 	}
@@ -736,7 +759,11 @@ func parsePatch(path string, layer model.Layer) (model.Patch, error) {
 }
 
 func parseMetadataSupportFile(path string, layer model.Layer) (model.MetadataFile, error) {
-	lines, vars, err := parseMetadataFile(path)
+	return parseMetadataSupportFileWithCache(path, layer, nil)
+}
+
+func parseMetadataSupportFileWithCache(path string, layer model.Layer, parseCache *metadataParseCache) (model.MetadataFile, error) {
+	lines, vars, err := parseMetadataFileCached(path, parseCache)
 	if err != nil {
 		return model.MetadataFile{}, err
 	}
@@ -756,10 +783,14 @@ func parseMetadataFileWithIncludes(path string, layerRoot string) ([]string, map
 }
 
 func parseMetadataFileWithIncludesIndexed(path string, layerRoot string, fileIndex layerFileIndex) ([]string, map[string]string, error) {
-	return parseMetadataFileWithIncludesSeen(path, layerRoot, fileIndex, map[string]bool{})
+	return parseMetadataFileWithIncludesCached(path, layerRoot, fileIndex, nil)
 }
 
-func parseMetadataFileWithIncludesSeen(path string, layerRoot string, fileIndex layerFileIndex, seen map[string]bool) ([]string, map[string]string, error) {
+func parseMetadataFileWithIncludesCached(path string, layerRoot string, fileIndex layerFileIndex, parseCache *metadataParseCache) ([]string, map[string]string, error) {
+	return parseMetadataFileWithIncludesSeen(path, layerRoot, fileIndex, parseCache, map[string]bool{})
+}
+
+func parseMetadataFileWithIncludesSeen(path string, layerRoot string, fileIndex layerFileIndex, parseCache *metadataParseCache, seen map[string]bool) ([]string, map[string]string, error) {
 	cleanPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, nil, err
@@ -770,7 +801,7 @@ func parseMetadataFileWithIncludesSeen(path string, layerRoot string, fileIndex 
 	}
 	seen[cleanPath] = true
 
-	lines, vars, err := parseMetadataFile(path)
+	lines, vars, err := parseMetadataFileCached(path, parseCache)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -786,7 +817,7 @@ func parseMetadataFileWithIncludesSeen(path string, layerRoot string, fileIndex 
 			continue
 		}
 
-		includeLines, includeVars, includeErr := parseMetadataFileWithIncludesSeen(resolved, layerRoot, fileIndex, seen)
+		includeLines, includeVars, includeErr := parseMetadataFileWithIncludesSeen(resolved, layerRoot, fileIndex, parseCache, seen)
 		if includeErr != nil {
 			continue
 		}
@@ -902,6 +933,58 @@ func fileExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
+func parseMetadataFileCached(path string, parseCache *metadataParseCache) ([]string, map[string]string, error) {
+	if parseCache == nil {
+		return parseMetadataFile(path)
+	}
+
+	cleanPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if cached, ok := parseCache.files.Load(cleanPath); ok {
+		return cloneMetadataParseEntry(cached.(metadataParseEntry))
+	}
+
+	lines, vars, parseErr := parseMetadataFile(path)
+	entry := metadataParseEntry{
+		Lines: cloneStringSlice(lines),
+		Vars:  cloneStringMap(vars),
+		Err:   parseErr,
+	}
+	parseCache.files.Store(cleanPath, entry)
+
+	return cloneMetadataParseEntry(entry)
+}
+
+func cloneMetadataParseEntry(entry metadataParseEntry) ([]string, map[string]string, error) {
+	return cloneStringSlice(entry.Lines), cloneStringMap(entry.Vars), entry.Err
+}
+
+func cloneStringSlice(values []string) []string {
+	if values == nil {
+		return nil
+	}
+
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+
+	return out
+}
+
 func parseMetadataFile(path string) ([]string, map[string]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -958,14 +1041,14 @@ func normalizeVar(v string) string {
 	return v
 }
 
-func runAllRules(report model.Report) []model.Finding {
+func runAllRules(report model.Report, parseCache *metadataParseCache) []model.Finding {
 	var findings []model.Finding
 
-	findings = append(findings, checkLayerDependencyGraph(report)...)
+	findings = append(findings, checkLayerDependencyGraph(report, parseCache)...)
 
 	for _, layer := range report.Layers {
-		findings = append(findings, checkLayerBasics(layer)...)
-		findings = append(findings, checkLayerTargetRelease(layer, report.TargetRelease)...)
+		findings = append(findings, checkLayerBasics(layer, parseCache)...)
+		findings = append(findings, checkLayerTargetRelease(layer, report.TargetRelease, parseCache)...)
 	}
 
 	for _, recipe := range report.Recipes {
@@ -1000,11 +1083,11 @@ func runAllRules(report model.Report) []model.Finding {
 	return findings
 }
 
-func checkLayerBasics(layer model.Layer) []model.Finding {
+func checkLayerBasics(layer model.Layer, parseCache *metadataParseCache) []model.Finding {
 	var findings []model.Finding
 
 	conf := filepath.Join(layer.Path, "conf", "layer.conf")
-	lines, vars, err := parseMetadataFileWithIncludes(conf, layer.Path)
+	lines, vars, err := parseMetadataFileWithIncludesCached(conf, layer.Path, nil, parseCache)
 	if err != nil {
 		return findings
 	}
@@ -1043,14 +1126,14 @@ func checkLayerBasics(layer model.Layer) []model.Finding {
 	return findings
 }
 
-func checkLayerTargetRelease(layer model.Layer, targetRelease string) []model.Finding {
+func checkLayerTargetRelease(layer model.Layer, targetRelease string, parseCache *metadataParseCache) []model.Finding {
 	targetRelease = strings.TrimSpace(targetRelease)
 	if targetRelease == "" {
 		return nil
 	}
 
 	conf := filepath.Join(layer.Path, "conf", "layer.conf")
-	lines, vars, err := parseMetadataFileWithIncludes(conf, layer.Path)
+	lines, vars, err := parseMetadataFileWithIncludesCached(conf, layer.Path, nil, parseCache)
 	if err != nil {
 		return nil
 	}
@@ -1083,8 +1166,8 @@ type layerNode struct {
 	Series      []string
 }
 
-func checkLayerDependencyGraph(report model.Report) []model.Finding {
-	nodes := buildLayerNodes(report.Layers)
+func checkLayerDependencyGraph(report model.Report, parseCache *metadataParseCache) []model.Finding {
+	nodes := buildLayerNodes(report.Layers, parseCache)
 	if len(nodes) == 0 {
 		return nil
 	}
@@ -1184,12 +1267,12 @@ func checkLayerDependencyGraph(report model.Report) []model.Finding {
 	return findings
 }
 
-func buildLayerNodes(layers []model.Layer) []layerNode {
+func buildLayerNodes(layers []model.Layer, parseCache *metadataParseCache) []layerNode {
 	nodes := make([]layerNode, 0, len(layers))
 
 	for _, layer := range layers {
 		conf := filepath.Join(layer.Path, "conf", "layer.conf")
-		_, vars, err := parseMetadataFileWithIncludes(conf, layer.Path)
+		_, vars, err := parseMetadataFileWithIncludesCached(conf, layer.Path, nil, parseCache)
 		if err != nil {
 			continue
 		}

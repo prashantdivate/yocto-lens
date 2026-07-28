@@ -279,6 +279,33 @@ func TestCheckDuplicateProviders(t *testing.T) {
 	}
 }
 
+func TestMetadataParseCacheReturnsCopies(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "foo.inc")
+	writeTestFile(t, path, `SUMMARY = "foo"
+`)
+
+	cache := &metadataParseCache{}
+	lines, vars, err := parseMetadataFileCached(path, cache)
+	if err != nil {
+		t.Fatalf("parseMetadataFileCached() error = %v", err)
+	}
+
+	lines[0] = "changed"
+	vars["SUMMARY"] = "changed"
+
+	lines, vars, err = parseMetadataFileCached(path, cache)
+	if err != nil {
+		t.Fatalf("parseMetadataFileCached() second error = %v", err)
+	}
+	if lines[0] != `SUMMARY = "foo"` {
+		t.Fatalf("cached line = %q, want original", lines[0])
+	}
+	if vars["SUMMARY"] != "foo" {
+		t.Fatalf("cached SUMMARY = %q, want foo", vars["SUMMARY"])
+	}
+}
+
 func hasFinding(findings []model.Finding, ruleID string, path string) bool {
 	for _, finding := range findings {
 		if finding.RuleID == ruleID && finding.File == path {
