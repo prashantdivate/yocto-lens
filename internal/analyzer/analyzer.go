@@ -2415,7 +2415,7 @@ func checkDuplicateProviders(recipes []model.Recipe) []model.Finding {
 }
 
 func recipeProviders(recipe model.Recipe) []string {
-	providers := []string{recipe.PN}
+	var providers []string
 	for _, provider := range splitProviderList(recipe.Variables["PROVIDES"]) {
 		if provider == "${PN}" {
 			provider = recipe.PN

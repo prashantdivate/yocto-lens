@@ -279,6 +279,28 @@ func TestCheckDuplicateProviders(t *testing.T) {
 	}
 }
 
+func TestCheckDuplicateProvidersIgnoresImplicitPN(t *testing.T) {
+	recipes := []model.Recipe{
+		{
+			Path:      "foo_1.0.bb",
+			Layer:     "meta-a",
+			PN:        "foo",
+			Variables: map[string]string{},
+		},
+		{
+			Path:      "foo_2.0.bb",
+			Layer:     "meta-a",
+			PN:        "foo",
+			Variables: map[string]string{},
+		},
+	}
+
+	findings := checkDuplicateProviders(recipes)
+	if len(findings) != 0 {
+		t.Fatalf("checkDuplicateProviders() reported implicit PN overlap: %#v", findings)
+	}
+}
+
 func TestMetadataParseCacheReturnsCopies(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "foo.inc")
