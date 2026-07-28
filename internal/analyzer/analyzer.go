@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/example/yocto-lens/internal/model"
 )
@@ -44,6 +46,31 @@ var skipDirs = map[string]bool{
 	"saved_tmpdir":         true,
 	"yocto-lens-reports":   true,
 	"yocto_static_reports": true,
+}
+
+type parsedFileKind int
+
+const (
+	parsedFileUnknown parsedFileKind = iota
+	parsedRecipe
+	parsedAppend
+	parsedPatch
+)
+
+type parseJob struct {
+	Index int
+	Path  string
+	Layer model.Layer
+}
+
+type parseResult struct {
+	Index  int
+	Path   string
+	Kind   parsedFileKind
+	Recipe model.Recipe
+	Append model.Append
+	Patch  model.Patch
+	Err    error
 }
 
 func Analyze(paths []string) (model.Report, error) {
@@ -89,61 +116,7 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 			FindingsFound:  len(report.Findings),
 		})
 
-		err := filepath.WalkDir(layer.Path, func(path string, d os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return nil
-			}
-
-			if d.IsDir() {
-				if shouldSkipDir(d.Name()) && path != layer.Path {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-
-			if !isInterestingFile(path) {
-				return nil
-			}
-
-			filesProcessed++
-
-			if filesProcessed%50 == 0 {
-				emit(progress, model.ScanProgress{
-					Phase:          model.PhaseParsing,
-					CurrentPath:    path,
-					LayersFound:    len(report.Layers),
-					RecipesFound:   len(report.Recipes),
-					AppendsFound:   len(report.Appends),
-					PatchesFound:   len(report.Patches),
-					FilesProcessed: filesProcessed,
-					FindingsFound:  len(report.Findings),
-				})
-			}
-
-			switch {
-			case strings.HasSuffix(path, ".bb"):
-				recipe, parseErr := parseRecipe(path, layer)
-				if parseErr == nil {
-					report.Recipes = append(report.Recipes, recipe)
-				}
-
-			case strings.HasSuffix(path, ".bbappend"):
-				appendFile, parseErr := parseAppend(path, layer)
-				if parseErr == nil {
-					report.Appends = append(report.Appends, appendFile)
-				}
-
-			case strings.HasSuffix(path, ".patch"):
-				patch, parseErr := parsePatch(path, layer)
-				if parseErr == nil {
-					report.Patches = append(report.Patches, patch)
-				}
-			}
-
-			return nil
-		})
-
-		if err != nil {
+		if err := parseLayerFiles(layer, &report, &filesProcessed, progress); err != nil {
 			return report, err
 		}
 	}
@@ -181,6 +154,200 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 	})
 
 	return report, nil
+}
+
+func parseLayerFiles(layer model.Layer, report *model.Report, filesProcessed *int, progress ProgressFunc) error {
+	jobs, err := collectParseJobs(layer)
+	if err != nil {
+		return err
+	}
+	if len(jobs) == 0 {
+		return nil
+	}
+
+	parsedRecipes := 0
+	parsedAppends := 0
+	parsedPatches := 0
+
+	results := parseFilesConcurrently(jobs, func(result parseResult) {
+		*filesProcessed++
+
+		if result.Err == nil {
+			switch result.Kind {
+			case parsedRecipe:
+				parsedRecipes++
+			case parsedAppend:
+				parsedAppends++
+			case parsedPatch:
+				parsedPatches++
+			}
+		}
+
+		if *filesProcessed%50 == 0 {
+			emit(progress, model.ScanProgress{
+				Phase:          model.PhaseParsing,
+				CurrentPath:    result.Path,
+				LayersFound:    len(report.Layers),
+				RecipesFound:   len(report.Recipes) + parsedRecipes,
+				AppendsFound:   len(report.Appends) + parsedAppends,
+				PatchesFound:   len(report.Patches) + parsedPatches,
+				FilesProcessed: *filesProcessed,
+				FindingsFound:  len(report.Findings),
+			})
+		}
+	})
+	sort.SliceStable(results, func(i, j int) bool {
+		return results[i].Index < results[j].Index
+	})
+
+	for _, result := range results {
+		if result.Err != nil {
+			continue
+		}
+
+		switch result.Kind {
+		case parsedRecipe:
+			report.Recipes = append(report.Recipes, result.Recipe)
+		case parsedAppend:
+			report.Appends = append(report.Appends, result.Append)
+		case parsedPatch:
+			report.Patches = append(report.Patches, result.Patch)
+		}
+	}
+
+	emit(progress, model.ScanProgress{
+		Phase:          model.PhaseParsing,
+		CurrentPath:    layer.Path,
+		LayersFound:    len(report.Layers),
+		RecipesFound:   len(report.Recipes),
+		AppendsFound:   len(report.Appends),
+		PatchesFound:   len(report.Patches),
+		FilesProcessed: *filesProcessed,
+		FindingsFound:  len(report.Findings),
+	})
+
+	return nil
+}
+
+func collectParseJobs(layer model.Layer) ([]parseJob, error) {
+	var jobs []parseJob
+
+	err := filepath.WalkDir(layer.Path, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+
+		if d.IsDir() {
+			if shouldSkipDir(d.Name()) && path != layer.Path {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if !isInterestingFile(path) {
+			return nil
+		}
+
+		jobs = append(jobs, parseJob{
+			Index: len(jobs),
+			Path:  path,
+			Layer: layer,
+		})
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return jobs, nil
+}
+
+func parseFilesConcurrently(jobs []parseJob, onResult func(parseResult)) []parseResult {
+	results := make(chan parseResult, len(jobs))
+	jobCh := make(chan parseJob)
+
+	var wg sync.WaitGroup
+	workerCount := parseWorkerCount(len(jobs))
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobCh {
+				results <- parseInterestingFile(job)
+			}
+		}()
+	}
+
+	go func() {
+		for _, job := range jobs {
+			jobCh <- job
+		}
+		close(jobCh)
+		wg.Wait()
+		close(results)
+	}()
+
+	parsed := make([]parseResult, 0, len(jobs))
+	for result := range results {
+		parsed = append(parsed, result)
+		if onResult != nil {
+			onResult(result)
+		}
+	}
+
+	return parsed
+}
+
+func parseWorkerCount(jobCount int) int {
+	if jobCount <= 0 {
+		return 0
+	}
+
+	workers := runtime.GOMAXPROCS(0) * 2
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > 32 {
+		workers = 32
+	}
+	if workers > jobCount {
+		workers = jobCount
+	}
+
+	return workers
+}
+
+func parseInterestingFile(job parseJob) parseResult {
+	result := parseResult{
+		Index: job.Index,
+		Path:  job.Path,
+	}
+
+	switch {
+	case strings.HasSuffix(job.Path, ".bb"):
+		recipe, err := parseRecipe(job.Path, job.Layer)
+		result.Kind = parsedRecipe
+		result.Recipe = recipe
+		result.Err = err
+
+	case strings.HasSuffix(job.Path, ".bbappend"):
+		appendFile, err := parseAppend(job.Path, job.Layer)
+		result.Kind = parsedAppend
+		result.Append = appendFile
+		result.Err = err
+
+	case strings.HasSuffix(job.Path, ".patch"):
+		patch, err := parsePatch(job.Path, job.Layer)
+		result.Kind = parsedPatch
+		result.Patch = patch
+		result.Err = err
+
+	default:
+		result.Kind = parsedFileUnknown
+	}
+
+	return result
 }
 
 func discoverLayers(paths []string, progress ProgressFunc) ([]model.Layer, error) {
@@ -354,12 +521,7 @@ func parseMetadataFileWithIncludesSeen(path string, layerRoot string, seen map[s
 		return nil, nil, err
 	}
 
-	fileLines, readErr := readLines(path)
-	if readErr != nil {
-		return lines, vars, nil
-	}
-
-	for _, line := range fileLines {
+	for _, line := range lines {
 		includePath, ok := parseIncludeDirective(line)
 		if !ok {
 			continue
@@ -380,22 +542,6 @@ func parseMetadataFileWithIncludesSeen(path string, layerRoot string, seen map[s
 	}
 
 	return lines, vars, nil
-}
-
-func readLines(path string) ([]string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	var lines []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-
-	return lines, scanner.Err()
 }
 
 func parseIncludeDirective(line string) (string, bool) {
