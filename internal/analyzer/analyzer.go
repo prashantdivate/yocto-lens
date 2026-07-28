@@ -21,6 +21,7 @@ var assignmentPattern = regexp.MustCompile(`^([A-Za-z0-9_:+${}./-]+)\s*(\?=|\+=|
 var looseAssignmentPattern = regexp.MustCompile(`^([A-Za-z0-9_:+${}./-]+)\s*(\?=|\+=|=|:=|\.=|=\+)\s*(.*)$`)
 var recipeNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]*(_[A-Za-z0-9.+~:-]+)?$`)
 var variableNamePattern = regexp.MustCompile(`^[A-Z0-9_:+${}./-]+$`)
+var oldOverridePattern = regexp.MustCompile(`(^|[A-Za-z0-9_${}./:+-])_(append|prepend|remove)([[:space:]:=\(\{\[]|$)`)
 
 var skipDirs = map[string]bool{
 	".git":                 true,
@@ -1580,34 +1581,6 @@ func checkRecipeStyle(recipe model.Recipe) []model.Finding {
 		))
 	}
 
-	if !hasVar(recipe.Variables, "LICENSE") {
-		findings = append(findings, finding(
-			"style/missing-license",
-			"Missing LICENSE",
-			model.SeverityMedium,
-			recipe.Layer,
-			recipe.Path,
-			1,
-			"Recipe does not define LICENSE.",
-			"Clear license metadata is required for review hygiene and generated license manifests.",
-			"Add a valid LICENSE value, for example LICENSE = \"MIT\".",
-		))
-	}
-
-	if !hasVar(recipe.Variables, "LIC_FILES_CHKSUM") {
-		findings = append(findings, finding(
-			"style/missing-lic-files-chksum",
-			"Missing LIC_FILES_CHKSUM",
-			model.SeverityMedium,
-			recipe.Layer,
-			recipe.Path,
-			1,
-			"Recipe does not define LIC_FILES_CHKSUM.",
-			"Yocto uses license file checksums to detect upstream license changes during builds.",
-			"Add LIC_FILES_CHKSUM pointing to the upstream license file.",
-		))
-	}
-
 	if hasVar(recipe.Variables, "LICENSE") && strings.EqualFold(strings.TrimSpace(recipe.Variables["LICENSE"]), "CLOSED") {
 		findings = append(findings, finding(
 			"style/closed-license",
@@ -1714,19 +1687,19 @@ func checkLinesStatic(path string, layer string, lines []string) []model.Finding
 		"/home/",
 		"/users/",
 		"/mnt/c/",
-		"/tmp/",
-		"/var/tmp/",
+		"c:/users/",
 	}
 
 	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		lower := strings.ToLower(line)
+		code := stripInlineComment(line)
+		trimmed := strings.TrimSpace(code)
+		lower := strings.ToLower(code)
 
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
 
-		if strings.Contains(line, "AUTOREV") {
+		if containsAUTOREV(trimmed) {
 			findings = append(findings, finding(
 				"static/autorev-used",
 				"AUTOREV used",
@@ -1741,7 +1714,7 @@ func checkLinesStatic(path string, layer string, lines []string) []model.Finding
 		}
 
 		for _, p := range hostPaths {
-			if strings.Contains(lower, p) {
+			if metadataLineHasHostPath(trimmed, lower, p) {
 				findings = append(findings, finding(
 					"static/host-absolute-path",
 					"Host-specific absolute path",
@@ -1757,32 +1730,170 @@ func checkLinesStatic(path string, layer string, lines []string) []model.Finding
 			}
 		}
 
-		for _, pattern := range secretPatterns {
-			if strings.Contains(lower, pattern) && strings.Contains(line, "=") {
-				findings = append(findings, finding(
-					"static/possible-hardcoded-secret",
-					"Possible hardcoded secret",
-					model.SeverityHigh,
-					layer,
-					path,
-					i+1,
-					"This line appears to contain a password, token, key, or secret.",
-					"Secrets in Yocto metadata can leak into source control, build logs, images, or deployed devices.",
-					"Move secrets to CI secrets, runtime provisioning, secure storage, or device-specific provisioning.",
-				))
-				break
-			}
+		if lineLooksLikeSecretAssignment(trimmed, secretPatterns) {
+			findings = append(findings, finding(
+				"static/possible-hardcoded-secret",
+				"Possible hardcoded secret",
+				model.SeverityHigh,
+				layer,
+				path,
+				i+1,
+				"This line appears to contain a password, token, key, or secret.",
+				"Secrets in Yocto metadata can leak into source control, build logs, images, or deployed devices.",
+				"Move secrets to CI secrets, runtime provisioning, secure storage, or device-specific provisioning.",
+			))
 		}
 	}
 
 	return findings
 }
 
+func containsAUTOREV(line string) bool {
+	matches := looseAssignmentPattern.FindStringSubmatch(line)
+	if len(matches) != 4 {
+		return false
+	}
+
+	key := normalizeVar(matches[1])
+	value := strings.ToUpper(strings.Trim(strings.TrimSpace(matches[3]), "\"'"))
+	if key != "SRCREV" && key != "PV" && key != "SRCREV_FORMAT" {
+		return false
+	}
+
+	return value == "AUTOREV" || strings.Contains(value, "${AUTOREV}")
+}
+
+func metadataLineHasHostPath(trimmed string, lower string, pattern string) bool {
+	if !strings.Contains(lower, pattern) {
+		return false
+	}
+
+	matches := looseAssignmentPattern.FindStringSubmatch(trimmed)
+	if len(matches) != 4 {
+		return false
+	}
+
+	key := normalizeVar(matches[1])
+	hostPathVars := map[string]bool{
+		"S":                 true,
+		"B":                 true,
+		"WORKDIR":           true,
+		"EXTERNALSRC":       true,
+		"EXTERNALSRC_BUILD": true,
+		"FILESEXTRAPATHS":   true,
+		"SRC_URI":           true,
+	}
+
+	return hostPathVars[key]
+}
+
+func lineLooksLikeSecretAssignment(trimmed string, secretPatterns []string) bool {
+	matches := looseAssignmentPattern.FindStringSubmatch(trimmed)
+	if len(matches) != 4 {
+		return false
+	}
+
+	key := strings.ToLower(normalizeVar(matches[1]))
+	value := strings.Trim(strings.TrimSpace(matches[3]), "\"'")
+	lowerValue := strings.ToLower(value)
+
+	for _, pattern := range secretPatterns {
+		if strings.Contains(key, pattern) && looksLikeRealSecretValue(value) {
+			return true
+		}
+	}
+
+	return strings.Contains(lowerValue, "begin rsa private key") ||
+		strings.Contains(lowerValue, "begin openssh private key")
+}
+
+func looksLikeRealSecretValue(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+
+	lower := strings.ToLower(value)
+	placeholders := []string{
+		"changeme",
+		"change-me",
+		"example",
+		"placeholder",
+		"todo",
+		"tbd",
+		"none",
+		"not-set",
+		"${",
+	}
+	for _, placeholder := range placeholders {
+		if strings.Contains(lower, placeholder) {
+			return false
+		}
+	}
+
+	return len(value) >= 8 ||
+		strings.Contains(lower, "begin rsa private key") ||
+		strings.Contains(lower, "begin openssh private key")
+}
+
+func stripInlineComment(line string) string {
+	inSingle := false
+	inDouble := false
+	escaped := false
+
+	for i, r := range line {
+		if escaped {
+			escaped = false
+			continue
+		}
+
+		if r == '\\' {
+			escaped = true
+			continue
+		}
+
+		switch r {
+		case '\'':
+			if !inDouble {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle {
+				inDouble = !inDouble
+			}
+		case '#':
+			if !inSingle && !inDouble {
+				return line[:i]
+			}
+		}
+	}
+
+	return line
+}
+
+func hasOldOverrideSyntax(line string) bool {
+	if matches := looseAssignmentPattern.FindStringSubmatch(line); len(matches) == 4 {
+		return oldOverridePattern.MatchString(matches[1])
+	}
+
+	if idx := strings.Index(line, "("); idx > 0 {
+		return oldOverridePattern.MatchString(strings.TrimSpace(line[:idx]))
+	}
+
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return false
+	}
+
+	return oldOverridePattern.MatchString(fields[0])
+}
+
 func checkLinesStyle(path string, layer string, lines []string) []model.Finding {
 	var findings []model.Finding
 
 	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
+		code := stripInlineComment(line)
+		trimmed := strings.TrimSpace(code)
 
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
@@ -1802,7 +1913,7 @@ func checkLinesStyle(path string, layer string, lines []string) []model.Finding 
 			))
 		}
 
-		if strings.Contains(line, "_append") || strings.Contains(line, "_prepend") || strings.Contains(line, "_remove") {
+		if hasOldOverrideSyntax(trimmed) {
 			findings = append(findings, finding(
 				"style/old-override-syntax",
 				"Old override syntax",
@@ -2089,24 +2200,6 @@ func checkPatchReferences(report model.Report) []model.Finding {
 			patchesByLayerBase,
 			referenced,
 		)...)
-	}
-
-	for _, patch := range report.Patches {
-		if referenced[patch.Path] {
-			continue
-		}
-
-		findings = append(findings, finding(
-			"static/patch-unreferenced",
-			"Patch file not referenced",
-			model.SeverityInfo,
-			patch.Layer,
-			patch.Path,
-			1,
-			"Patch file was found in the layer, but no scanned recipe or bbappend references it from SRC_URI.",
-			"Unreferenced patches can be stale, dead maintenance burden, or a sign that metadata is missing a required patch.",
-			"Remove the patch if it is obsolete, or reference it from SRC_URI if it is required.",
-		))
 	}
 
 	return findings

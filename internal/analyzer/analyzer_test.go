@@ -216,11 +216,11 @@ func TestCheckPatchReferences(t *testing.T) {
 	if !hasFinding(findings, "static/patch-reference-missing", recipePath) {
 		t.Fatal("did not find missing patch reference")
 	}
-	if !hasFinding(findings, "static/patch-unreferenced", unusedPatch) {
-		t.Fatal("did not find unreferenced patch")
-	}
 	if hasFinding(findings, "static/patch-unreferenced", usedPatch) {
 		t.Fatal("referenced patch was reported as unreferenced")
+	}
+	if hasFinding(findings, "static/patch-unreferenced", unusedPatch) {
+		t.Fatal("unreferenced patch was reported by default")
 	}
 }
 
@@ -306,9 +306,83 @@ func TestMetadataParseCacheReturnsCopies(t *testing.T) {
 	}
 }
 
+func TestLineRulesAvoidCommonFalsePositives(t *testing.T) {
+	lines := []string{
+		`SUMMARY = "mentions AUTOREV only in a value" # AUTOREV in comment`,
+		`do_install() { install -d ${D}/tmp/runtime }`,
+		`LICENSE_FLAGS_ACCEPTED = "commercial_token"`,
+		`API_TOKEN = "${CI_API_TOKEN}"`,
+		`SRC_URI = "https://example.com/file_appendix.tar.gz"`,
+		`SRC_URI = "file://real.patch" # /home/user/comment`,
+	}
+
+	staticFindings := checkLinesStatic("foo.bb", "meta-test", lines)
+	if len(staticFindings) != 0 {
+		t.Fatalf("checkLinesStatic() produced false positives: %#v", staticFindings)
+	}
+
+	styleFindings := checkLinesStyle("foo.bb", "meta-test", lines)
+	if hasRule(styleFindings, "style/old-override-syntax") {
+		t.Fatalf("checkLinesStyle() reported incidental _append text: %#v", styleFindings)
+	}
+}
+
+func TestLineRulesStillCatchHighConfidenceIssues(t *testing.T) {
+	lines := []string{
+		`SRCREV = "${AUTOREV}"`,
+		`EXTERNALSRC = "/home/user/src/project"`,
+		`API_TOKEN = "1234567890abcdef"`,
+		`SRC_URI_append = " file://extra.patch"`,
+	}
+
+	staticFindings := checkLinesStatic("foo.bb", "meta-test", lines)
+	for _, ruleID := range []string{
+		"static/autorev-used",
+		"static/host-absolute-path",
+		"static/possible-hardcoded-secret",
+	} {
+		if !hasRule(staticFindings, ruleID) {
+			t.Fatalf("checkLinesStatic() missing %s in %#v", ruleID, staticFindings)
+		}
+	}
+
+	styleFindings := checkLinesStyle("foo.bb", "meta-test", lines)
+	if !hasRule(styleFindings, "style/old-override-syntax") {
+		t.Fatalf("checkLinesStyle() did not catch old override syntax: %#v", styleFindings)
+	}
+}
+
+func TestRecipeStyleDoesNotDuplicateLicenseCompliance(t *testing.T) {
+	recipe := model.Recipe{
+		Path:      "closed.bb",
+		Layer:     "meta-test",
+		Name:      "closed",
+		PN:        "closed",
+		Variables: map[string]string{"LICENSE": "CLOSED"},
+		Lines:     []string{`LICENSE = "CLOSED"`},
+	}
+
+	findings := checkRecipeStyle(recipe)
+	for _, ruleID := range []string{"style/missing-license", "style/missing-lic-files-chksum"} {
+		if hasRule(findings, ruleID) {
+			t.Fatalf("checkRecipeStyle() produced duplicate/noisy %s: %#v", ruleID, findings)
+		}
+	}
+}
+
 func hasFinding(findings []model.Finding, ruleID string, path string) bool {
 	for _, finding := range findings {
 		if finding.RuleID == ruleID && finding.File == path {
+			return true
+		}
+	}
+
+	return false
+}
+
+func hasRule(findings []model.Finding, ruleID string) bool {
+	for _, finding := range findings {
+		if finding.RuleID == ruleID {
 			return true
 		}
 	}
