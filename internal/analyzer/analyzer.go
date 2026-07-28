@@ -958,6 +958,7 @@ func runAllRules(report model.Report) []model.Finding {
 		findings = append(findings, checkPatchStyle(patch)...)
 	}
 
+	findings = append(findings, checkPatchReferences(report)...)
 	findings = append(findings, checkDuplicateRecipes(report.Recipes)...)
 
 	return findings
@@ -1897,6 +1898,131 @@ func checkPatchStyle(patch model.Patch) []model.Finding {
 	}
 
 	return findings
+}
+
+func checkPatchReferences(report model.Report) []model.Finding {
+	patchesByLayerBase := map[string]model.Patch{}
+	referenced := map[string]bool{}
+	var findings []model.Finding
+
+	for _, patch := range report.Patches {
+		patchesByLayerBase[patchLayerBaseKey(patch.Layer, filepath.Base(patch.Path))] = patch
+	}
+
+	for _, recipe := range report.Recipes {
+		findings = append(findings, checkMetadataPatchReferences(
+			recipe.Path,
+			recipe.Layer,
+			recipe.Variables["SRC_URI"],
+			recipe.Lines,
+			patchesByLayerBase,
+			referenced,
+		)...)
+	}
+
+	for _, appendFile := range report.Appends {
+		findings = append(findings, checkMetadataPatchReferences(
+			appendFile.Path,
+			appendFile.Layer,
+			appendFile.Variables["SRC_URI"],
+			appendFile.Lines,
+			patchesByLayerBase,
+			referenced,
+		)...)
+	}
+
+	for _, patch := range report.Patches {
+		if referenced[patch.Path] {
+			continue
+		}
+
+		findings = append(findings, finding(
+			"static/patch-unreferenced",
+			"Patch file not referenced",
+			model.SeverityInfo,
+			patch.Layer,
+			patch.Path,
+			1,
+			"Patch file was found in the layer, but no scanned recipe or bbappend references it from SRC_URI.",
+			"Unreferenced patches can be stale, dead maintenance burden, or a sign that metadata is missing a required patch.",
+			"Remove the patch if it is obsolete, or reference it from SRC_URI if it is required.",
+		))
+	}
+
+	return findings
+}
+
+func checkMetadataPatchReferences(path string, layer string, srcURI string, lines []string, patchesByLayerBase map[string]model.Patch, referenced map[string]bool) []model.Finding {
+	var findings []model.Finding
+
+	for _, patchRef := range patchReferencesFromSRCURI(srcURI) {
+		resolved, ok := resolvePatchReference(path, layer, patchRef, patchesByLayerBase)
+		if ok {
+			referenced[resolved.Path] = true
+			continue
+		}
+
+		findings = append(findings, finding(
+			"static/patch-reference-missing",
+			"Referenced patch not found",
+			model.SeverityHigh,
+			layer,
+			path,
+			findLine(lines, patchRef),
+			fmt.Sprintf("SRC_URI references patch %q, but the patch file was not found in the scanned layer.", patchRef),
+			"Missing patch files cause do_patch failures and break reproducible CI builds.",
+			"Add the missing patch file, fix the SRC_URI path, or remove the stale reference.",
+		))
+	}
+
+	return findings
+}
+
+func patchReferencesFromSRCURI(srcURI string) []string {
+	var refs []string
+
+	for _, token := range strings.Fields(srcURI) {
+		token = strings.Trim(token, "\"'\\")
+		if !strings.HasPrefix(token, "file://") {
+			continue
+		}
+
+		ref := strings.TrimPrefix(token, "file://")
+		if idx := strings.Index(ref, ";"); idx >= 0 {
+			ref = ref[:idx]
+		}
+		ref = strings.TrimSpace(ref)
+		if ref == "" || !strings.HasSuffix(strings.ToLower(ref), ".patch") {
+			continue
+		}
+
+		refs = append(refs, ref)
+	}
+
+	return uniqueStrings(refs)
+}
+
+func resolvePatchReference(metadataPath string, layer string, patchRef string, patchesByLayerBase map[string]model.Patch) (model.Patch, bool) {
+	dir := filepath.Dir(metadataPath)
+	candidates := []string{
+		filepath.Join(dir, patchRef),
+		filepath.Join(dir, "files", patchRef),
+		filepath.Join(dir, filepath.Base(patchRef)),
+		filepath.Join(dir, "files", filepath.Base(patchRef)),
+	}
+
+	for _, candidate := range candidates {
+		if fileExists(candidate) {
+			return model.Patch{Path: candidate, Layer: layer}, true
+		}
+	}
+
+	patch, ok := patchesByLayerBase[patchLayerBaseKey(layer, filepath.Base(patchRef))]
+	return patch, ok
+}
+
+func patchLayerBaseKey(layer string, base string) string {
+	return layer + "\x00" + base
 }
 
 func checkVariableOrder(path string, layer string, lines []string) []model.Finding {

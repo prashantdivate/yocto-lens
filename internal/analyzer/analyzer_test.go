@@ -176,6 +176,56 @@ LICENSE = "MIT"
 	}
 }
 
+func TestCheckPatchReferences(t *testing.T) {
+	root := t.TempDir()
+	recipePath := filepath.Join(root, "meta-test", "recipes-test", "foo", "foo_1.0.bb")
+	usedPatch := filepath.Join(root, "meta-test", "recipes-test", "foo", "files", "used.patch")
+	unusedPatch := filepath.Join(root, "meta-test", "recipes-test", "foo", "files", "unused.patch")
+
+	writeTestFile(t, recipePath, `SRC_URI = "file://used.patch file://missing.patch"
+`)
+	writeTestFile(t, usedPatch, "")
+	writeTestFile(t, unusedPatch, "")
+
+	report := model.Report{
+		Recipes: []model.Recipe{
+			{
+				Path:  recipePath,
+				Layer: "meta-test",
+				Variables: map[string]string{
+					"SRC_URI": "file://used.patch file://missing.patch",
+				},
+				Lines: []string{`SRC_URI = "file://used.patch file://missing.patch"`},
+			},
+		},
+		Patches: []model.Patch{
+			{Path: usedPatch, Layer: "meta-test"},
+			{Path: unusedPatch, Layer: "meta-test"},
+		},
+	}
+
+	findings := checkPatchReferences(report)
+	if !hasFinding(findings, "static/patch-reference-missing", recipePath) {
+		t.Fatal("did not find missing patch reference")
+	}
+	if !hasFinding(findings, "static/patch-unreferenced", unusedPatch) {
+		t.Fatal("did not find unreferenced patch")
+	}
+	if hasFinding(findings, "static/patch-unreferenced", usedPatch) {
+		t.Fatal("referenced patch was reported as unreferenced")
+	}
+}
+
+func hasFinding(findings []model.Finding, ruleID string, path string) bool {
+	for _, finding := range findings {
+		if finding.RuleID == ruleID && finding.File == path {
+			return true
+		}
+	}
+
+	return false
+}
+
 func writeTestFile(t *testing.T, path string, content string) {
 	t.Helper()
 
