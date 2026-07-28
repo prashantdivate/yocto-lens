@@ -40,6 +40,14 @@ type Patch struct {
 	Lines []string `json:"-"`
 }
 
+type MetadataFile struct {
+	Path      string            `json:"path"`
+	Layer     string            `json:"layer"`
+	Kind      string            `json:"kind"`
+	Variables map[string]string `json:"variables"`
+	Lines     []string          `json:"-"`
+}
+
 type Finding struct {
 	RuleID       string   `json:"rule_id"`
 	Title        string   `json:"title"`
@@ -59,6 +67,7 @@ type Report struct {
 	Recipes       []Recipe  `json:"recipes"`
 	Appends       []Append  `json:"appends"`
 	Patches       []Patch   `json:"patches"`
+	MetadataFiles []MetadataFile `json:"metadata_files,omitempty"`
 	Findings      []Finding `json:"findings"`
 }
 

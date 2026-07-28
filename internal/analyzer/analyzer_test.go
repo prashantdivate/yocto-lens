@@ -28,6 +28,8 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=abc"
 `)
 	writeTestFile(t, filepath.Join(layer, "recipes-z", "foo", "foo_%.bbappend"), `FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 `)
+	writeTestFile(t, filepath.Join(layer, "classes", "image-policy.bbclass"), `IMAGE_FEATURES += "ssh-server-dropbear"
+`)
 	writeTestFile(t, filepath.Join(layer, "recipes-z", "foo", "fix.patch"), `From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 Subject: [PATCH] fix foo
 Upstream-Status: Pending
@@ -64,8 +66,14 @@ diff --git a/foo b/foo
 	if len(report.Patches) != 1 {
 		t.Fatalf("len(report.Patches) = %d, want 1", len(report.Patches))
 	}
-	if lastProgress.FilesProcessed != 4 {
-		t.Fatalf("last progress files = %d, want 4", lastProgress.FilesProcessed)
+	if len(report.MetadataFiles) != 1 {
+		t.Fatalf("len(report.MetadataFiles) = %d, want 1", len(report.MetadataFiles))
+	}
+	if report.MetadataFiles[0].Kind != "bbclass" {
+		t.Fatalf("report.MetadataFiles[0].Kind = %q, want bbclass", report.MetadataFiles[0].Kind)
+	}
+	if lastProgress.FilesProcessed != 5 {
+		t.Fatalf("last progress files = %d, want 5", lastProgress.FilesProcessed)
 	}
 }
 

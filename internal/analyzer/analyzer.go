@@ -56,6 +56,7 @@ const (
 	parsedRecipe
 	parsedAppend
 	parsedPatch
+	parsedMetadata
 )
 
 type parseJob struct {
@@ -71,6 +72,7 @@ type parseResult struct {
 	Recipe model.Recipe
 	Append model.Append
 	Patch  model.Patch
+	Metadata model.MetadataFile
 	Err    error
 }
 
@@ -105,6 +107,7 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 		Recipes:       []model.Recipe{},
 		Appends:       []model.Append{},
 		Patches:       []model.Patch{},
+		MetadataFiles: []model.MetadataFile{},
 		Findings:      []model.Finding{},
 	}
 
@@ -229,6 +232,8 @@ func parseLayerFiles(layer model.Layer, report *model.Report, filesProcessed *in
 			report.Appends = append(report.Appends, result.Append)
 		case parsedPatch:
 			report.Patches = append(report.Patches, result.Patch)
+		case parsedMetadata:
+			report.MetadataFiles = append(report.MetadataFiles, result.Metadata)
 		}
 	}
 
@@ -381,6 +386,12 @@ func parseInterestingFile(job parseJob, fileIndex layerFileIndex) parseResult {
 		patch, err := parsePatch(job.Path, job.Layer)
 		result.Kind = parsedPatch
 		result.Patch = patch
+		result.Err = err
+
+	case strings.HasSuffix(job.Path, ".inc") || strings.HasSuffix(job.Path, ".bbclass"):
+		metadataFile, err := parseMetadataSupportFile(job.Path, job.Layer)
+		result.Kind = parsedMetadata
+		result.Metadata = metadataFile
 		result.Err = err
 
 	default:
@@ -647,7 +658,9 @@ func shouldSkipDir(name string) bool {
 func isInterestingFile(path string) bool {
 	return strings.HasSuffix(path, ".bb") ||
 		strings.HasSuffix(path, ".bbappend") ||
-		strings.HasSuffix(path, ".patch")
+		strings.HasSuffix(path, ".patch") ||
+		strings.HasSuffix(path, ".inc") ||
+		strings.HasSuffix(path, ".bbclass")
 }
 
 func parseRecipe(path string, layer model.Layer) (model.Recipe, error) {
@@ -719,6 +732,22 @@ func parsePatch(path string, layer model.Layer) (model.Patch, error) {
 		Path:  path,
 		Layer: layer.Name,
 		Lines: lines,
+	}, nil
+}
+
+func parseMetadataSupportFile(path string, layer model.Layer) (model.MetadataFile, error) {
+	lines, vars, err := parseMetadataFile(path)
+	if err != nil {
+		return model.MetadataFile{}, err
+	}
+
+	kind := strings.TrimPrefix(filepath.Ext(path), ".")
+	return model.MetadataFile{
+		Path:      path,
+		Layer:     layer.Name,
+		Kind:      kind,
+		Variables: vars,
+		Lines:     lines,
 	}, nil
 }
 
@@ -952,6 +981,11 @@ func runAllRules(report model.Report) []model.Finding {
 		findings = append(findings, checkAppendStyle(appendFile)...)
 		findings = append(findings, checkLinesStatic(appendFile.Path, appendFile.Layer, appendFile.Lines)...)
 		findings = append(findings, checkLinesStyle(appendFile.Path, appendFile.Layer, appendFile.Lines)...)
+	}
+
+	for _, metadataFile := range report.MetadataFiles {
+		findings = append(findings, checkLinesStatic(metadataFile.Path, metadataFile.Layer, metadataFile.Lines)...)
+		findings = append(findings, checkLinesStyle(metadataFile.Path, metadataFile.Layer, metadataFile.Lines)...)
 	}
 
 	for _, patch := range report.Patches {
@@ -1958,6 +1992,17 @@ func checkPatchReferences(report model.Report) []model.Finding {
 			appendFile.Layer,
 			appendFile.Variables["SRC_URI"],
 			appendFile.Lines,
+			patchesByLayerBase,
+			referenced,
+		)...)
+	}
+
+	for _, metadataFile := range report.MetadataFiles {
+		findings = append(findings, checkMetadataPatchReferences(
+			metadataFile.Path,
+			metadataFile.Layer,
+			metadataFile.Variables["SRC_URI"],
+			metadataFile.Lines,
 			patchesByLayerBase,
 			referenced,
 		)...)
