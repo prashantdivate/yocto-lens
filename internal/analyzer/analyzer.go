@@ -73,6 +73,8 @@ type parseResult struct {
 	Err    error
 }
 
+type layerFileIndex map[string][]string
+
 func Analyze(paths []string) (model.Report, error) {
 	return AnalyzeWithProgress(paths, nil)
 }
@@ -157,7 +159,7 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 }
 
 func parseLayerFiles(layer model.Layer, report *model.Report, filesProcessed *int, progress ProgressFunc) error {
-	jobs, err := collectParseJobs(layer)
+	jobs, fileIndex, err := collectParseJobs(layer)
 	if err != nil {
 		return err
 	}
@@ -169,7 +171,7 @@ func parseLayerFiles(layer model.Layer, report *model.Report, filesProcessed *in
 	parsedAppends := 0
 	parsedPatches := 0
 
-	results := parseFilesConcurrently(jobs, func(result parseResult) {
+	results := parseFilesConcurrently(jobs, fileIndex, func(result parseResult) {
 		*filesProcessed++
 
 		if result.Err == nil {
@@ -229,8 +231,9 @@ func parseLayerFiles(layer model.Layer, report *model.Report, filesProcessed *in
 	return nil
 }
 
-func collectParseJobs(layer model.Layer) ([]parseJob, error) {
+func collectParseJobs(layer model.Layer) ([]parseJob, layerFileIndex, error) {
 	var jobs []parseJob
+	fileIndex := layerFileIndex{}
 
 	err := filepath.WalkDir(layer.Path, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -243,6 +246,8 @@ func collectParseJobs(layer model.Layer) ([]parseJob, error) {
 			}
 			return nil
 		}
+
+		fileIndex.add(path)
 
 		if !isInterestingFile(path) {
 			return nil
@@ -257,13 +262,26 @@ func collectParseJobs(layer model.Layer) ([]parseJob, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return jobs, nil
+	return jobs, fileIndex, nil
 }
 
-func parseFilesConcurrently(jobs []parseJob, onResult func(parseResult)) []parseResult {
+func (idx layerFileIndex) add(path string) {
+	idx[filepath.Base(path)] = append(idx[filepath.Base(path)], path)
+}
+
+func (idx layerFileIndex) findBase(base string) (string, bool) {
+	matches := idx[base]
+	if len(matches) == 0 {
+		return "", false
+	}
+
+	return matches[0], true
+}
+
+func parseFilesConcurrently(jobs []parseJob, fileIndex layerFileIndex, onResult func(parseResult)) []parseResult {
 	results := make(chan parseResult, len(jobs))
 	jobCh := make(chan parseJob)
 
@@ -274,7 +292,7 @@ func parseFilesConcurrently(jobs []parseJob, onResult func(parseResult)) []parse
 		go func() {
 			defer wg.Done()
 			for job := range jobCh {
-				results <- parseInterestingFile(job)
+				results <- parseInterestingFile(job, fileIndex)
 			}
 		}()
 	}
@@ -318,7 +336,7 @@ func parseWorkerCount(jobCount int) int {
 	return workers
 }
 
-func parseInterestingFile(job parseJob) parseResult {
+func parseInterestingFile(job parseJob, fileIndex layerFileIndex) parseResult {
 	result := parseResult{
 		Index: job.Index,
 		Path:  job.Path,
@@ -326,13 +344,13 @@ func parseInterestingFile(job parseJob) parseResult {
 
 	switch {
 	case strings.HasSuffix(job.Path, ".bb"):
-		recipe, err := parseRecipe(job.Path, job.Layer)
+		recipe, err := parseRecipeWithIndex(job.Path, job.Layer, fileIndex)
 		result.Kind = parsedRecipe
 		result.Recipe = recipe
 		result.Err = err
 
 	case strings.HasSuffix(job.Path, ".bbappend"):
-		appendFile, err := parseAppend(job.Path, job.Layer)
+		appendFile, err := parseAppendWithIndex(job.Path, job.Layer, fileIndex)
 		result.Kind = parsedAppend
 		result.Append = appendFile
 		result.Err = err
@@ -438,7 +456,11 @@ func isInterestingFile(path string) bool {
 }
 
 func parseRecipe(path string, layer model.Layer) (model.Recipe, error) {
-	lines, vars, err := parseMetadataFileWithIncludes(path, layer.Path)
+	return parseRecipeWithIndex(path, layer, nil)
+}
+
+func parseRecipeWithIndex(path string, layer model.Layer, fileIndex layerFileIndex) (model.Recipe, error) {
+	lines, vars, err := parseMetadataFileWithIncludesIndexed(path, layer.Path, fileIndex)
 	if err != nil {
 		return model.Recipe{}, err
 	}
@@ -471,7 +493,11 @@ func parseRecipe(path string, layer model.Layer) (model.Recipe, error) {
 }
 
 func parseAppend(path string, layer model.Layer) (model.Append, error) {
-	lines, vars, err := parseMetadataFileWithIncludes(path, layer.Path)
+	return parseAppendWithIndex(path, layer, nil)
+}
+
+func parseAppendWithIndex(path string, layer model.Layer, fileIndex layerFileIndex) (model.Append, error) {
+	lines, vars, err := parseMetadataFileWithIncludesIndexed(path, layer.Path, fileIndex)
 	if err != nil {
 		return model.Append{}, err
 	}
@@ -502,10 +528,14 @@ func parsePatch(path string, layer model.Layer) (model.Patch, error) {
 }
 
 func parseMetadataFileWithIncludes(path string, layerRoot string) ([]string, map[string]string, error) {
-	return parseMetadataFileWithIncludesSeen(path, layerRoot, map[string]bool{})
+	return parseMetadataFileWithIncludesIndexed(path, layerRoot, nil)
 }
 
-func parseMetadataFileWithIncludesSeen(path string, layerRoot string, seen map[string]bool) ([]string, map[string]string, error) {
+func parseMetadataFileWithIncludesIndexed(path string, layerRoot string, fileIndex layerFileIndex) ([]string, map[string]string, error) {
+	return parseMetadataFileWithIncludesSeen(path, layerRoot, fileIndex, map[string]bool{})
+}
+
+func parseMetadataFileWithIncludesSeen(path string, layerRoot string, fileIndex layerFileIndex, seen map[string]bool) ([]string, map[string]string, error) {
 	cleanPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, nil, err
@@ -527,12 +557,12 @@ func parseMetadataFileWithIncludesSeen(path string, layerRoot string, seen map[s
 			continue
 		}
 
-		resolved, ok := resolveIncludePath(includePath, path, layerRoot, vars)
+		resolved, ok := resolveIncludePath(includePath, path, layerRoot, vars, fileIndex)
 		if !ok {
 			continue
 		}
 
-		includeLines, includeVars, includeErr := parseMetadataFileWithIncludesSeen(resolved, layerRoot, seen)
+		includeLines, includeVars, includeErr := parseMetadataFileWithIncludesSeen(resolved, layerRoot, fileIndex, seen)
 		if includeErr != nil {
 			continue
 		}
@@ -570,7 +600,7 @@ func parseIncludeDirective(line string) (string, bool) {
 	return includePath, true
 }
 
-func resolveIncludePath(includePath string, currentFile string, layerRoot string, vars map[string]string) (string, bool) {
+func resolveIncludePath(includePath string, currentFile string, layerRoot string, vars map[string]string, fileIndex layerFileIndex) (string, bool) {
 	includePath = expandSimpleVars(includePath, vars)
 
 	if filepath.IsAbs(includePath) {
@@ -597,6 +627,10 @@ func resolveIncludePath(includePath string, currentFile string, layerRoot string
 	}
 
 	base := filepath.Base(includePath)
+	if fileIndex != nil {
+		return fileIndex.findBase(base)
+	}
+
 	found := ""
 
 	_ = filepath.WalkDir(layerRoot, func(path string, d os.DirEntry, err error) error {

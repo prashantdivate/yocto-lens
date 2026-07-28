@@ -68,6 +68,27 @@ diff --git a/foo b/foo
 	}
 }
 
+func TestResolveIncludePathUsesLayerFileIndex(t *testing.T) {
+	root := t.TempDir()
+	currentFile := filepath.Join(root, "recipes-test", "foo", "foo_1.0.bb")
+	includeFile := filepath.Join(root, "shared", "common.inc")
+	writeTestFile(t, currentFile, `require common.inc
+`)
+	writeTestFile(t, includeFile, `SUMMARY = "from include"
+`)
+
+	index := layerFileIndex{}
+	index.add(includeFile)
+
+	resolved, ok := resolveIncludePath("common.inc", currentFile, filepath.Join(root, "missing-layer-root"), nil, index)
+	if !ok {
+		t.Fatal("resolveIncludePath() did not resolve include from index")
+	}
+	if resolved != includeFile {
+		t.Fatalf("resolveIncludePath() = %q, want %q", resolved, includeFile)
+	}
+}
+
 func writeTestFile(t *testing.T, path string, content string) {
 	t.Helper()
 
