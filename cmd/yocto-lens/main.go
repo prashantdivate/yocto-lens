@@ -32,6 +32,7 @@ func main() {
 	sarifPath := flag.String("sarif", "", "write SARIF report to file")
 	noTUI := flag.Bool("no-tui", false, "disable TUI and print console output")
 	profile := flag.Bool("profile", false, "print scan phase timing profile")
+	failOn := flag.String("fail-on", "", "exit non-zero when findings are at or above severity: critical, high, medium, low, info")
 	flag.Parse()
 
 	paths := flag.Args()
@@ -39,7 +40,13 @@ func main() {
 		paths = []string{"."}
 	}
 
-	if *noTUI || *profile {
+	failSeverity, failOnEnabled, err := parseFailOnSeverity(*failOn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid --fail-on value: %v\n", err)
+		os.Exit(2)
+	}
+
+	if *noTUI || *profile || failOnEnabled {
 		scanProfile := newScanProfile()
 		if *profile && !*noTUI {
 			fmt.Println("Scanning with profiling enabled...")
@@ -79,6 +86,10 @@ func main() {
 		printSummary(report)
 		if *profile {
 			printScanProfile(scanProfile)
+		}
+		if failOnEnabled && reportHasSeverityAtLeast(report, failSeverity) {
+			fmt.Fprintf(os.Stderr, "quality gate failed: findings at or above %s were found\n", failSeverity)
+			os.Exit(1)
 		}
 		return
 	}
@@ -447,6 +458,56 @@ func sarifLevel(sev model.Severity) string {
 		return "warning"
 	default:
 		return "note"
+	}
+}
+
+func parseFailOnSeverity(value string) (model.Severity, bool, error) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" || value == "none" || value == "off" {
+		return "", false, nil
+	}
+
+	switch value {
+	case "critical":
+		return model.SeverityCritical, true, nil
+	case "high":
+		return model.SeverityHigh, true, nil
+	case "medium", "warning", "warn":
+		return model.SeverityMedium, true, nil
+	case "low":
+		return model.SeverityLow, true, nil
+	case "info", "note":
+		return model.SeverityInfo, true, nil
+	default:
+		return "", false, fmt.Errorf("%q, expected critical, high, medium, low, info, or none", value)
+	}
+}
+
+func reportHasSeverityAtLeast(report model.Report, threshold model.Severity) bool {
+	thresholdRank := severityRank(threshold)
+	for _, finding := range report.Findings {
+		if severityRank(finding.Severity) >= thresholdRank {
+			return true
+		}
+	}
+
+	return false
+}
+
+func severityRank(sev model.Severity) int {
+	switch sev {
+	case model.SeverityCritical:
+		return 5
+	case model.SeverityHigh:
+		return 4
+	case model.SeverityMedium:
+		return 3
+	case model.SeverityLow:
+		return 2
+	case model.SeverityInfo:
+		return 1
+	default:
+		return 0
 	}
 }
 

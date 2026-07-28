@@ -36,6 +36,44 @@ func TestSarifLevel(t *testing.T) {
 	}
 }
 
+func TestParseFailOnSeverity(t *testing.T) {
+	sev, enabled, err := parseFailOnSeverity("HIGH")
+	if err != nil {
+		t.Fatalf("parseFailOnSeverity(HIGH) error = %v", err)
+	}
+	if !enabled || sev != model.SeverityHigh {
+		t.Fatalf("parseFailOnSeverity(HIGH) = %s, %v; want HIGH, true", sev, enabled)
+	}
+
+	_, enabled, err = parseFailOnSeverity("none")
+	if err != nil {
+		t.Fatalf("parseFailOnSeverity(none) error = %v", err)
+	}
+	if enabled {
+		t.Fatal("parseFailOnSeverity(none) enabled gate")
+	}
+
+	if _, _, err := parseFailOnSeverity("loud"); err == nil {
+		t.Fatal("parseFailOnSeverity(loud) error = nil, want error")
+	}
+}
+
+func TestReportHasSeverityAtLeast(t *testing.T) {
+	report := model.Report{
+		Findings: []model.Finding{
+			{Severity: model.SeverityLow},
+			{Severity: model.SeverityHigh},
+		},
+	}
+
+	if !reportHasSeverityAtLeast(report, model.SeverityMedium) {
+		t.Fatal("reportHasSeverityAtLeast(medium) = false, want true")
+	}
+	if reportHasSeverityAtLeast(report, model.SeverityCritical) {
+		t.Fatal("reportHasSeverityAtLeast(critical) = true, want false")
+	}
+}
+
 func TestScanProfileRecordsProgress(t *testing.T) {
 	profile := newScanProfile()
 	profile.Observe(model.ScanProgress{Phase: model.PhaseStarting})
