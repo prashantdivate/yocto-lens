@@ -30,6 +30,7 @@ type scanProfile struct {
 func main() {
 	jsonPath := flag.String("json", "", "write JSON report to file")
 	sarifPath := flag.String("sarif", "", "write SARIF report to file")
+	markdownPath := flag.String("markdown", "", "write Markdown report to file")
 	noTUI := flag.Bool("no-tui", false, "disable TUI and print console output")
 	profile := flag.Bool("profile", false, "print scan phase timing profile")
 	failOn := flag.String("fail-on", "", "exit non-zero when findings are at or above severity: critical, high, medium, low, info")
@@ -78,7 +79,7 @@ func main() {
 			os.Exit(1)
 		}
 
-		if err := writeOutputs(report, *jsonPath, *sarifPath); err != nil {
+		if err := writeOutputs(report, *jsonPath, *sarifPath, *markdownPath); err != nil {
 			fmt.Fprintf(os.Stderr, "export failed: %v\n", err)
 			os.Exit(1)
 		}
@@ -106,14 +107,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	if *jsonPath != "" || *sarifPath != "" {
+	if *jsonPath != "" || *sarifPath != "" || *markdownPath != "" {
 		report, err := analyzer.Analyze(paths)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "analysis failed during export: %v\n", err)
 			os.Exit(1)
 		}
 
-		if err := writeOutputs(report, *jsonPath, *sarifPath); err != nil {
+		if err := writeOutputs(report, *jsonPath, *sarifPath, *markdownPath); err != nil {
 			fmt.Fprintf(os.Stderr, "export failed: %v\n", err)
 			os.Exit(1)
 		}
@@ -331,7 +332,7 @@ func clearScreen() {
 	fmt.Print("\033[2J\033[H")
 }
 
-func writeOutputs(report model.Report, jsonPath string, sarifPath string) error {
+func writeOutputs(report model.Report, jsonPath string, sarifPath string, markdownPath string) error {
 	if jsonPath != "" {
 		if err := writeJSON(report, jsonPath); err != nil {
 			return err
@@ -340,6 +341,12 @@ func writeOutputs(report model.Report, jsonPath string, sarifPath string) error 
 
 	if sarifPath != "" {
 		if err := writeSARIF(report, sarifPath); err != nil {
+			return err
+		}
+	}
+
+	if markdownPath != "" {
+		if err := writeMarkdown(report, markdownPath); err != nil {
 			return err
 		}
 	}
@@ -360,6 +367,52 @@ func writeJSON(report model.Report, path string) error {
 	return os.WriteFile(path, data, 0644)
 }
 
+func writeMarkdown(report model.Report, path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil && filepath.Dir(path) != "." {
+		return err
+	}
+
+	var b strings.Builder
+	high, medium, low := severityCounts(report)
+
+	b.WriteString("# Yocto Lens Report\n\n")
+	b.WriteString(fmt.Sprintf("- Root: `%s`\n", markdownEscape(report.Root)))
+	if report.TargetRelease != "" {
+		b.WriteString(fmt.Sprintf("- Target release: `%s`\n", markdownEscape(report.TargetRelease)))
+	}
+	b.WriteString(fmt.Sprintf("- Layers: %d\n", len(report.Layers)))
+	b.WriteString(fmt.Sprintf("- Recipes: %d\n", len(report.Recipes)))
+	b.WriteString(fmt.Sprintf("- bbappends: %d\n", len(report.Appends)))
+	b.WriteString(fmt.Sprintf("- Patches: %d\n", len(report.Patches)))
+	b.WriteString(fmt.Sprintf("- Metadata files: %d\n", len(report.MetadataFiles)))
+	b.WriteString(fmt.Sprintf("- Findings: %d\n", len(report.Findings)))
+	b.WriteString(fmt.Sprintf("- High: %d\n", high))
+	b.WriteString(fmt.Sprintf("- Medium: %d\n", medium))
+	b.WriteString(fmt.Sprintf("- Low/info: %d\n\n", low))
+
+	if len(report.Findings) == 0 {
+		b.WriteString("No findings.\n")
+		return os.WriteFile(path, []byte(b.String()), 0644)
+	}
+
+	findings := sortedFindings(report.Findings)
+	b.WriteString("## Findings\n\n")
+	b.WriteString("| Severity | Rule | File | Line | Message |\n")
+	b.WriteString("| --- | --- | --- | ---: | --- |\n")
+	for _, finding := range findings {
+		b.WriteString(fmt.Sprintf(
+			"| %s | `%s` | `%s` | %d | %s |\n",
+			finding.Severity,
+			markdownEscape(finding.RuleID),
+			markdownEscape(sarifURI(finding.File)),
+			finding.Line,
+			markdownEscape(finding.Message),
+		))
+	}
+
+	return os.WriteFile(path, []byte(b.String()), 0644)
+}
+
 func writeSARIF(report model.Report, path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil && filepath.Dir(path) != "." {
 		return err
@@ -368,18 +421,7 @@ func writeSARIF(report model.Report, path string) error {
 	rulesByID := map[string]map[string]any{}
 	results := []map[string]any{}
 
-	findings := append([]model.Finding(nil), report.Findings...)
-	sort.SliceStable(findings, func(i, j int) bool {
-		if findings[i].RuleID != findings[j].RuleID {
-			return findings[i].RuleID < findings[j].RuleID
-		}
-		if findings[i].File != findings[j].File {
-			return findings[i].File < findings[j].File
-		}
-		return findings[i].Line < findings[j].Line
-	})
-
-	for _, finding := range findings {
+	for _, finding := range sortedFindings(report.Findings) {
 		rulesByID[finding.RuleID] = map[string]any{
 			"id":   finding.RuleID,
 			"name": finding.Title,
@@ -461,6 +503,48 @@ func sarifLevel(sev model.Severity) string {
 	}
 }
 
+func sortedFindings(findings []model.Finding) []model.Finding {
+	sorted := append([]model.Finding(nil), findings...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if severityRank(sorted[i].Severity) != severityRank(sorted[j].Severity) {
+			return severityRank(sorted[i].Severity) > severityRank(sorted[j].Severity)
+		}
+		if sorted[i].RuleID != sorted[j].RuleID {
+			return sorted[i].RuleID < sorted[j].RuleID
+		}
+		if sorted[i].File != sorted[j].File {
+			return sorted[i].File < sorted[j].File
+		}
+		return sorted[i].Line < sorted[j].Line
+	})
+
+	return sorted
+}
+
+func severityCounts(report model.Report) (int, int, int) {
+	high, medium, low := 0, 0, 0
+
+	for _, finding := range report.Findings {
+		switch finding.Severity {
+		case model.SeverityCritical, model.SeverityHigh:
+			high++
+		case model.SeverityMedium:
+			medium++
+		default:
+			low++
+		}
+	}
+
+	return high, medium, low
+}
+
+func markdownEscape(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "|", "\\|")
+	return strings.TrimSpace(value)
+}
+
 func parseFailOnSeverity(value string) (model.Severity, bool, error) {
 	value = strings.TrimSpace(strings.ToLower(value))
 	if value == "" || value == "none" || value == "off" {
@@ -531,18 +615,7 @@ func sarifURI(path string) string {
 }
 
 func printSummary(report model.Report) {
-	high, medium, low := 0, 0, 0
-
-	for _, finding := range report.Findings {
-		switch finding.Severity {
-		case model.SeverityCritical, model.SeverityHigh:
-			high++
-		case model.SeverityMedium:
-			medium++
-		default:
-			low++
-		}
-	}
+	high, medium, low := severityCounts(report)
 
 	fmt.Printf("Layers: %d\n", len(report.Layers))
 	fmt.Printf("Recipes: %d\n", len(report.Recipes))

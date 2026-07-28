@@ -168,6 +168,9 @@ yocto-lens <path_to_yocto_layer> --json report.json
 
 # Produce industry-standard SARIF data for GitHub Security Code Scanning integration
 yocto-lens <path_to_yocto_layer> --sarif report.sarif
+
+# Produce a human-readable Markdown report for PR artifacts or review notes
+yocto-lens <path_to_yocto_layer> --markdown report.md
 ```
 
 ### Project Configuration:

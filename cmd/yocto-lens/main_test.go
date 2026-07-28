@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -71,6 +72,59 @@ func TestReportHasSeverityAtLeast(t *testing.T) {
 	}
 	if reportHasSeverityAtLeast(report, model.SeverityCritical) {
 		t.Fatal("reportHasSeverityAtLeast(critical) = true, want false")
+	}
+}
+
+func TestWriteMarkdown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report.md")
+	report := model.Report{
+		Root:          "meta-test",
+		TargetRelease: "scarthgap",
+		Layers:        []model.Layer{{Name: "meta-test", Path: "/layers/meta-test"}},
+		Findings: []model.Finding{
+			{
+				RuleID:   "static/test",
+				Severity: model.SeverityHigh,
+				File:     "recipes-test/foo.bb",
+				Line:     7,
+				Message:  "Value contains | pipe",
+			},
+		},
+	}
+
+	if err := writeMarkdown(report, path); err != nil {
+		t.Fatalf("writeMarkdown() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"# Yocto Lens Report",
+		"Target release: `scarthgap`",
+		"| HIGH | `static/test` |",
+		"Value contains \\| pipe",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("Markdown report missing %q in:\n%s", want, content)
+		}
+	}
+}
+
+func TestSortedFindingsSeverityFirst(t *testing.T) {
+	findings := sortedFindings([]model.Finding{
+		{RuleID: "style/a", Severity: model.SeverityInfo, File: "b.bb"},
+		{RuleID: "static/a", Severity: model.SeverityHigh, File: "a.bb"},
+		{RuleID: "static/b", Severity: model.SeverityMedium, File: "c.bb"},
+	})
+
+	if findings[0].Severity != model.SeverityHigh {
+		t.Fatalf("first severity = %s, want HIGH", findings[0].Severity)
+	}
+	if findings[2].Severity != model.SeverityInfo {
+		t.Fatalf("last severity = %s, want INFO", findings[2].Severity)
 	}
 }
 
