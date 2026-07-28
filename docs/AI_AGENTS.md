@@ -63,6 +63,32 @@ Recommended stance for users:
 
 > Yocto Lens ships with a conservative built-in agent guide. Teams can add local project-specific instructions next to it, but the built-in guide should stay official-doc-based and broadly applicable.
 
+### Optional Companion Skill Pack
+
+`prashantdivate/awesome-yocto-ai-agent-skills` is a relevant optional companion repository:
+
+- Repository: https://github.com/prashantdivate/awesome-yocto-ai-agent-skills
+- License observed from GitHub: MIT.
+- Scope: Yocto Project, OpenEmbedded, BitBake, BSP bring-up, build debugging, recipe maintenance, image analysis, CI/KAS, deploy/flash, kernel/BSP, security, OTA, and compliance workflows.
+- Stance: official-doc-first workflows with links to primary Yocto/BitBake documentation rather than copying the manuals.
+
+Recommended integration stance:
+
+- Do not vendor the whole skill pack into Yocto Lens by default.
+- Link to it as an optional companion for users who want deeper AI-agent Yocto workflows.
+- If a local agent already has those skills installed, prefer starting with `yocto-agent-suite` for broad Yocto requests.
+- Keep Yocto Lens core agent files small enough to maintain with this repository.
+- If content from that skill pack is ever imported directly, preserve license attribution and review it as a normal dependency/content import.
+
+Useful optional skill routing:
+
+- `yocto-agent-suite`: broad Yocto request router.
+- `bitbake-metadata`: `.bb`, `.bbappend`, `.bbclass`, `.inc`, overrides, fetchers, signatures, task graphs.
+- `yocto-recipe-maintenance`: recipe/appends creation, updates, audits, and reviews.
+- `yocto-build-debug`: parse/fetch/compile/package/QA/sstate/performance debugging.
+- `yocto-ci-kas-build` and `yocto-ci-release`: KAS, CI matrices, shared caches, artifacts, SDKs.
+- `yocto-security-compliance`: CVE, license manifest, SPDX/SBOM, source provenance.
+
 ## Agent Operating Modes
 
 ### Answering Yocto Questions
