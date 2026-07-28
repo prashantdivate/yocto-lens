@@ -141,6 +141,12 @@ Execute analytical evaluations without starting the interactive terminal layout 
 yocto-lens --no-tui /path/to/meta-custom
 ```
 
+### Performance Profiling:
+Print phase timings for large workspace scans:
+```bash
+yocto-lens --profile /path/to/meta-openembedded
+```
+
 ### Isolated Scope Telemetry Checks:
 ```bash
 # Target only structural vulnerabilities and security flags

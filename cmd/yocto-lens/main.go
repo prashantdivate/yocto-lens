@@ -18,10 +18,19 @@ import (
 	"github.com/example/yocto-lens/internal/tui"
 )
 
+type scanProfile struct {
+	started   time.Time
+	lastAt    time.Time
+	lastPhase model.ScanPhase
+	durations map[model.ScanPhase]time.Duration
+	progress  model.ScanProgress
+}
+
 func main() {
 	jsonPath := flag.String("json", "", "write JSON report to file")
 	sarifPath := flag.String("sarif", "", "write SARIF report to file")
 	noTUI := flag.Bool("no-tui", false, "disable TUI and print console output")
+	profile := flag.Bool("profile", false, "print scan phase timing profile")
 	flag.Parse()
 
 	paths := flag.Args()
@@ -29,21 +38,32 @@ func main() {
 		paths = []string{"."}
 	}
 
-	if *noTUI {
+	if *noTUI || *profile {
+		scanProfile := newScanProfile()
+		if *profile && !*noTUI {
+			fmt.Println("Scanning with profiling enabled...")
+		}
+
 		report, err := analyzer.AnalyzeWithProgress(paths, func(p model.ScanProgress) {
-			fmt.Printf(
-				"\r[%s] layers=%d recipes=%d bbappends=%d patches=%d files=%d findings=%d %s",
-				p.Phase,
-				p.LayersFound,
-				p.RecipesFound,
-				p.AppendsFound,
-				p.PatchesFound,
-				p.FilesProcessed,
-				p.FindingsFound,
-				compactConsolePath(p.CurrentPath, 70),
-			)
+			scanProfile.Observe(p)
+			if *noTUI {
+				fmt.Printf(
+					"\r[%s] layers=%d recipes=%d bbappends=%d patches=%d files=%d findings=%d %s",
+					p.Phase,
+					p.LayersFound,
+					p.RecipesFound,
+					p.AppendsFound,
+					p.PatchesFound,
+					p.FilesProcessed,
+					p.FindingsFound,
+					compactConsolePath(p.CurrentPath, 70),
+				)
+			}
 		})
-		fmt.Println()
+		scanProfile.Finish()
+		if *noTUI {
+			fmt.Println()
+		}
 
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "analysis failed: %v\n", err)
@@ -56,6 +76,9 @@ func main() {
 		}
 
 		printSummary(report)
+		if *profile {
+			printScanProfile(scanProfile)
+		}
 		return
 	}
 
@@ -83,6 +106,43 @@ func main() {
 			os.Exit(1)
 		}
 	}
+}
+
+func newScanProfile() *scanProfile {
+	now := time.Now()
+	return &scanProfile{
+		started:   now,
+		lastAt:    now,
+		durations: map[model.ScanPhase]time.Duration{},
+	}
+}
+
+func (p *scanProfile) Observe(progress model.ScanProgress) {
+	now := time.Now()
+	if p.lastPhase == "" {
+		p.lastPhase = progress.Phase
+		p.lastAt = now
+	} else if progress.Phase != p.lastPhase {
+		p.durations[p.lastPhase] += now.Sub(p.lastAt)
+		p.lastPhase = progress.Phase
+		p.lastAt = now
+	}
+
+	p.progress = progress
+	if progress.Done {
+		p.Finish()
+	}
+}
+
+func (p *scanProfile) Finish() {
+	if p.lastPhase == "" {
+		return
+	}
+
+	now := time.Now()
+	p.durations[p.lastPhase] += now.Sub(p.lastAt)
+	p.lastPhase = ""
+	p.lastAt = now
 }
 
 func showSplash(paths []string) {
@@ -395,6 +455,36 @@ func printSummary(report model.Report) {
 	fmt.Printf("High: %d\n", high)
 	fmt.Printf("Medium: %d\n", medium)
 	fmt.Printf("Low: %d\n", low)
+}
+
+func printScanProfile(profile *scanProfile) {
+	fmt.Println()
+	fmt.Println("Profile:")
+	fmt.Printf("Total: %s\n", time.Since(profile.started).Round(time.Millisecond))
+
+	for _, phase := range []model.ScanPhase{
+		model.PhaseStarting,
+		model.PhaseDiscovering,
+		model.PhaseParsing,
+		model.PhaseRules,
+		model.PhaseDone,
+	} {
+		duration := profile.durations[phase]
+		if duration == 0 {
+			continue
+		}
+		fmt.Printf("%s: %s\n", phase, duration.Round(time.Millisecond))
+	}
+
+	fmt.Printf(
+		"Counts: layers=%d recipes=%d bbappends=%d patches=%d files=%d findings=%d\n",
+		profile.progress.LayersFound,
+		profile.progress.RecipesFound,
+		profile.progress.AppendsFound,
+		profile.progress.PatchesFound,
+		profile.progress.FilesProcessed,
+		profile.progress.FindingsFound,
+	)
 }
 
 func compactConsolePath(path string, max int) string {
