@@ -11,8 +11,11 @@ const (
 )
 
 type Layer struct {
-	Path string `json:"path"`
-	Name string `json:"name"`
+	Path     string `json:"path"`
+	Name     string `json:"name"`
+	Priority string `json:"priority,omitempty"`
+	Series   string `json:"series,omitempty"`
+	BBFiles  string `json:"bbfiles,omitempty"`
 }
 
 type Recipe struct {
@@ -61,14 +64,14 @@ type Finding struct {
 }
 
 type Report struct {
-	Root          string    `json:"root"`
-	TargetRelease string    `json:"target_release,omitempty"`
-	Layers        []Layer   `json:"layers"`
-	Recipes       []Recipe  `json:"recipes"`
-	Appends       []Append  `json:"appends"`
-	Patches       []Patch   `json:"patches"`
+	Root          string         `json:"root"`
+	TargetRelease string         `json:"target_release,omitempty"`
+	Layers        []Layer        `json:"layers"`
+	Recipes       []Recipe       `json:"recipes"`
+	Appends       []Append       `json:"appends"`
+	Patches       []Patch        `json:"patches"`
 	MetadataFiles []MetadataFile `json:"metadata_files,omitempty"`
-	Findings      []Finding `json:"findings"`
+	Findings      []Finding      `json:"findings"`
 }
 
 type ScanPhase string
