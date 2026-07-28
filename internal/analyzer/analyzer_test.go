@@ -89,6 +89,34 @@ func TestResolveIncludePathUsesLayerFileIndex(t *testing.T) {
 	}
 }
 
+func TestApplySuppressions(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "recipes-test", "foo", "foo_1.0.bb")
+	writeTestFile(t, path, `# yocto-lens-disable-next-line static/license-missing
+LICENSE = "CLOSED"
+SUMMARY = "foo" # yocto-lens-disable-line
+DESCRIPTION = "foo"
+`)
+
+	findings := []model.Finding{
+		{RuleID: "static/license-missing", File: path, Line: 2},
+		{RuleID: "static/license-closed", File: path, Line: 2},
+		{RuleID: "style/line-length", File: path, Line: 3},
+		{RuleID: "style/variable-order", File: path, Line: 4},
+	}
+
+	filtered := applySuppressions(findings)
+	if len(filtered) != 2 {
+		t.Fatalf("len(applySuppressions()) = %d, want 2", len(filtered))
+	}
+	if filtered[0].RuleID != "static/license-closed" {
+		t.Fatalf("filtered[0].RuleID = %q, want static/license-closed", filtered[0].RuleID)
+	}
+	if filtered[1].RuleID != "style/variable-order" {
+		t.Fatalf("filtered[1].RuleID = %q, want style/variable-order", filtered[1].RuleID)
+	}
+}
+
 func writeTestFile(t *testing.T, path string, content string) {
 	t.Helper()
 

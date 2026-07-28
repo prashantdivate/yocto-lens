@@ -134,7 +134,7 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 		FindingsFound:  len(report.Findings),
 	})
 
-	report.Findings = runAllRules(report)
+	report.Findings = applySuppressions(runAllRules(report))
 
 	sort.SliceStable(report.Findings, func(i, j int) bool {
 		if severityRank(report.Findings[i].Severity) == severityRank(report.Findings[j].Severity) {
@@ -1906,6 +1906,94 @@ func findLine(lines []string, needle string) int {
 		}
 	}
 	return 1
+}
+
+func applySuppressions(findings []model.Finding) []model.Finding {
+	if len(findings) == 0 {
+		return findings
+	}
+
+	fileCache := map[string][]string{}
+	filtered := make([]model.Finding, 0, len(findings))
+
+	for _, finding := range findings {
+		lines, ok := fileCache[finding.File]
+		if !ok {
+			readLines, err := readFileLines(finding.File)
+			if err != nil {
+				filtered = append(filtered, finding)
+				continue
+			}
+			lines = readLines
+			fileCache[finding.File] = lines
+		}
+
+		if shouldSuppressFinding(finding, lines) {
+			continue
+		}
+
+		filtered = append(filtered, finding)
+	}
+
+	return filtered
+}
+
+func readFileLines(path string) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	return lines, scanner.Err()
+}
+
+func shouldSuppressFinding(finding model.Finding, lines []string) bool {
+	if finding.Line <= 0 {
+		return false
+	}
+
+	lineIndex := finding.Line - 1
+	if lineIndex >= 0 && lineIndex < len(lines) &&
+		suppressionLineMatches(lines[lineIndex], "yocto-lens-disable-line", finding.RuleID) {
+		return true
+	}
+
+	previousIndex := lineIndex - 1
+	return previousIndex >= 0 && previousIndex < len(lines) &&
+		suppressionLineMatches(lines[previousIndex], "yocto-lens-disable-next-line", finding.RuleID)
+}
+
+func suppressionLineMatches(line string, directive string, ruleID string) bool {
+	pos := strings.Index(line, directive)
+	if pos < 0 {
+		return false
+	}
+
+	args := strings.TrimSpace(line[pos+len(directive):])
+	args = strings.TrimLeft(args, ":")
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return true
+	}
+
+	tokens := strings.FieldsFunc(args, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t'
+	})
+	for _, token := range tokens {
+		token = strings.TrimSpace(token)
+		if token == "*" || token == ruleID {
+			return true
+		}
+	}
+
+	return false
 }
 
 func finding(ruleID string, title string, severity model.Severity, layer string, file string, line int, message string, why string, remediation string) model.Finding {
