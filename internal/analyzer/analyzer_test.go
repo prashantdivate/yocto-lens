@@ -240,6 +240,37 @@ BBFILE_PRIORITY_test = "6"
 	}
 }
 
+func TestCheckDuplicateProviders(t *testing.T) {
+	recipes := []model.Recipe{
+		{
+			Path:  "foo_1.0.bb",
+			Layer: "meta-a",
+			PN:    "foo",
+			Variables: map[string]string{
+				"PROVIDES": "virtual/foo",
+			},
+			Lines: []string{`PROVIDES = "virtual/foo"`},
+		},
+		{
+			Path:  "foo_2.0.bb",
+			Layer: "meta-b",
+			PN:    "foo",
+			Variables: map[string]string{
+				"PROVIDES": "virtual/foo",
+			},
+			Lines: []string{`PROVIDES = "virtual/foo"`},
+		},
+	}
+
+	findings := checkDuplicateProviders(recipes)
+	if !hasFinding(findings, "static/duplicate-provider", "foo_1.0.bb") {
+		t.Fatal("did not find duplicate provider for first recipe")
+	}
+	if !hasFinding(findings, "static/duplicate-provider", "foo_2.0.bb") {
+		t.Fatal("did not find duplicate provider for second recipe")
+	}
+}
+
 func hasFinding(findings []model.Finding, ruleID string, path string) bool {
 	for _, finding := range findings {
 		if finding.RuleID == ruleID && finding.File == path {

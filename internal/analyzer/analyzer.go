@@ -961,6 +961,7 @@ func runAllRules(report model.Report) []model.Finding {
 
 	findings = append(findings, checkPatchReferences(report)...)
 	findings = append(findings, checkDuplicateRecipes(report.Recipes)...)
+	findings = append(findings, checkDuplicateProviders(report.Recipes)...)
 
 	return findings
 }
@@ -2145,6 +2146,79 @@ func checkDuplicateRecipes(recipes []model.Recipe) []model.Finding {
 	}
 
 	return findings
+}
+
+func checkDuplicateProviders(recipes []model.Recipe) []model.Finding {
+	var findings []model.Finding
+
+	byProvider := map[string][]model.Recipe{}
+	for _, recipe := range recipes {
+		for _, provider := range recipeProviders(recipe) {
+			byProvider[provider] = append(byProvider[provider], recipe)
+		}
+	}
+
+	providers := make([]string, 0, len(byProvider))
+	for provider := range byProvider {
+		providers = append(providers, provider)
+	}
+	sort.Strings(providers)
+
+	for _, provider := range providers {
+		matches := byProvider[provider]
+		if len(matches) < 2 {
+			continue
+		}
+
+		severity := model.SeverityLow
+		if strings.HasPrefix(provider, "virtual/") {
+			severity = model.SeverityInfo
+		}
+
+		for _, recipe := range matches {
+			findings = append(findings, finding(
+				"static/duplicate-provider",
+				"Provider has multiple recipes",
+				severity,
+				recipe.Layer,
+				recipe.Path,
+				findLine(recipe.Lines, "PROVIDES"),
+				fmt.Sprintf("Provider %q is claimed by multiple scanned recipes.", provider),
+				"Multiple providers can be valid, but they make image contents depend on layer priority, PREFERRED_PROVIDER, and distro policy.",
+				"Confirm the provider overlap is intentional and set PREFERRED_PROVIDER where the selected implementation must be explicit.",
+			))
+		}
+	}
+
+	return findings
+}
+
+func recipeProviders(recipe model.Recipe) []string {
+	providers := []string{recipe.PN}
+	for _, provider := range splitProviderList(recipe.Variables["PROVIDES"]) {
+		if provider == "${PN}" {
+			provider = recipe.PN
+		}
+		providers = append(providers, provider)
+	}
+
+	return uniqueStrings(providers)
+}
+
+func splitProviderList(value string) []string {
+	var providers []string
+
+	for _, provider := range strings.Fields(value) {
+		provider = strings.Trim(provider, "\"'\\")
+		provider = strings.TrimSpace(provider)
+		if provider == "" || strings.Contains(provider, "${") && provider != "${PN}" {
+			continue
+		}
+
+		providers = append(providers, provider)
+	}
+
+	return providers
 }
 
 func hasLayerSeriesCompat(vars map[string]string) bool {
