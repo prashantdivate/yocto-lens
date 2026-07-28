@@ -3,6 +3,7 @@ package analyzer
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/example/yocto-lens/internal/model"
@@ -114,6 +115,64 @@ DESCRIPTION = "foo"
 	}
 	if filtered[1].RuleID != "style/variable-order" {
 		t.Fatalf("filtered[1].RuleID = %q, want style/variable-order", filtered[1].RuleID)
+	}
+}
+
+func TestAnalyzeUsesConfigFile(t *testing.T) {
+	root := t.TempDir()
+	layer := filepath.Join(root, "meta-test")
+
+	writeTestFile(t, filepath.Join(root, ".yocto-lens.json"), `{
+  "target_release": "scarthgap",
+  "exclude": ["recipes-skip/**"],
+  "severity": {
+    "static/license-closed": "HIGH"
+  }
+}
+`)
+	writeTestFile(t, filepath.Join(layer, "conf", "layer.conf"), `BBFILE_COLLECTIONS = "test"
+LAYERSERIES_COMPAT_test = "scarthgap"
+BBFILE_PATTERN_test = "^${LAYERDIR}/"
+BBFILE_PRIORITY_test = "6"
+`)
+	writeTestFile(t, filepath.Join(layer, "recipes-keep", "foo", "foo_1.0.bb"), `SUMMARY = "foo"
+DESCRIPTION = "foo"
+LICENSE = "CLOSED"
+`)
+	writeTestFile(t, filepath.Join(layer, "recipes-skip", "bar", "bar_1.0.bb"), `SUMMARY = "bar"
+DESCRIPTION = "bar"
+LICENSE = "MIT"
+`)
+
+	report, err := Analyze([]string{root})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+
+	if report.TargetRelease != "scarthgap" {
+		t.Fatalf("report.TargetRelease = %q, want scarthgap", report.TargetRelease)
+	}
+	if len(report.Recipes) != 1 {
+		t.Fatalf("len(report.Recipes) = %d, want 1", len(report.Recipes))
+	}
+	if report.Recipes[0].Name != "foo_1.0" {
+		t.Fatalf("report.Recipes[0].Name = %q, want foo_1.0", report.Recipes[0].Name)
+	}
+
+	foundOverride := false
+	for _, finding := range report.Findings {
+		if finding.RuleID == "static/license-closed" {
+			foundOverride = true
+			if finding.Severity != model.SeverityHigh {
+				t.Fatalf("license-closed severity = %s, want HIGH", finding.Severity)
+			}
+		}
+		if strings.Contains(filepath.ToSlash(finding.File), "recipes-skip") {
+			t.Fatalf("finding for excluded path was not filtered: %s", finding.File)
+		}
+	}
+	if !foundOverride {
+		t.Fatal("did not find static/license-closed finding")
 	}
 }
 

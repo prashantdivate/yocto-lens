@@ -159,6 +159,30 @@ yocto-lens <path_to_yocto_layer> --json report.json
 yocto-lens <path_to_yocto_layer> --sarif report.sarif
 ```
 
+### Project Configuration:
+Place `.yocto-lens.json` or `yocto-lens.json` in the scan root to tune CI behavior without changing source code:
+```json
+{
+  "target_release": "scarthgap",
+  "exclude": [
+    "recipes-test/**",
+    "**/testdata/**"
+  ],
+  "disabled_rules": [
+    "style/*"
+  ],
+  "severity": {
+    "static/license-closed": "HIGH"
+  }
+}
+```
+
+Inline suppressions are also supported for intentional exceptions:
+```bitbake
+# yocto-lens-disable-next-line static/license-closed
+LICENSE = "CLOSED"
+```
+
 ---
 
 ## Keyboard Shortcuts
@@ -264,4 +288,3 @@ If Yocto Lens reduces your code review overhead or hardens your build environmen
 
 ## 📄 Licensing Rights
 This system is licensed entirely under the MIT Open Source License.
-

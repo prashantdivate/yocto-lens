@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -75,6 +76,14 @@ type parseResult struct {
 
 type layerFileIndex map[string][]string
 
+type analyzerConfig struct {
+	Exclude       []string                  `json:"exclude"`
+	DisabledRules []string                  `json:"disabled_rules"`
+	Severity      map[string]model.Severity `json:"severity"`
+	TargetRelease string                    `json:"target_release"`
+	Path          string                    `json:"-"`
+}
+
 func Analyze(paths []string) (model.Report, error) {
 	return AnalyzeWithProgress(paths, nil)
 }
@@ -84,13 +93,19 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 		paths = []string{"."}
 	}
 
+	cfg, err := loadAnalyzerConfig(paths)
+	if err != nil {
+		return model.Report{}, err
+	}
+
 	report := model.Report{
-		Root:     strings.Join(paths, ", "),
-		Layers:   []model.Layer{},
-		Recipes:  []model.Recipe{},
-		Appends:  []model.Append{},
-		Patches:  []model.Patch{},
-		Findings: []model.Finding{},
+		Root:          strings.Join(paths, ", "),
+		TargetRelease: cfg.TargetRelease,
+		Layers:        []model.Layer{},
+		Recipes:       []model.Recipe{},
+		Appends:       []model.Append{},
+		Patches:       []model.Patch{},
+		Findings:      []model.Finding{},
 	}
 
 	emit(progress, model.ScanProgress{
@@ -118,7 +133,7 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 			FindingsFound:  len(report.Findings),
 		})
 
-		if err := parseLayerFiles(layer, &report, &filesProcessed, progress); err != nil {
+		if err := parseLayerFiles(layer, &report, &filesProcessed, progress, cfg); err != nil {
 			return report, err
 		}
 	}
@@ -134,7 +149,7 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 		FindingsFound:  len(report.Findings),
 	})
 
-	report.Findings = applySuppressions(runAllRules(report))
+	report.Findings = applySuppressions(applyAnalyzerConfig(runAllRules(report), cfg))
 
 	sort.SliceStable(report.Findings, func(i, j int) bool {
 		if severityRank(report.Findings[i].Severity) == severityRank(report.Findings[j].Severity) {
@@ -158,8 +173,8 @@ func AnalyzeWithProgress(paths []string, progress ProgressFunc) (model.Report, e
 	return report, nil
 }
 
-func parseLayerFiles(layer model.Layer, report *model.Report, filesProcessed *int, progress ProgressFunc) error {
-	jobs, fileIndex, err := collectParseJobs(layer)
+func parseLayerFiles(layer model.Layer, report *model.Report, filesProcessed *int, progress ProgressFunc, cfg analyzerConfig) error {
+	jobs, fileIndex, err := collectParseJobs(layer, cfg)
 	if err != nil {
 		return err
 	}
@@ -231,7 +246,7 @@ func parseLayerFiles(layer model.Layer, report *model.Report, filesProcessed *in
 	return nil
 }
 
-func collectParseJobs(layer model.Layer) ([]parseJob, layerFileIndex, error) {
+func collectParseJobs(layer model.Layer, cfg analyzerConfig) ([]parseJob, layerFileIndex, error) {
 	var jobs []parseJob
 	fileIndex := layerFileIndex{}
 
@@ -244,6 +259,13 @@ func collectParseJobs(layer model.Layer) ([]parseJob, layerFileIndex, error) {
 			if shouldSkipDir(d.Name()) && path != layer.Path {
 				return filepath.SkipDir
 			}
+			if path != layer.Path && configMatchesPath(path, layer.Path, cfg.Exclude) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if configMatchesPath(path, layer.Path, cfg.Exclude) {
 			return nil
 		}
 
@@ -366,6 +388,179 @@ func parseInterestingFile(job parseJob, fileIndex layerFileIndex) parseResult {
 	}
 
 	return result
+}
+
+func loadAnalyzerConfig(paths []string) (analyzerConfig, error) {
+	for _, candidate := range configCandidatePaths(paths) {
+		data, err := os.ReadFile(candidate)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return analyzerConfig{}, err
+		}
+
+		var cfg analyzerConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return analyzerConfig{}, fmt.Errorf("parse %s: %w", candidate, err)
+		}
+		cfg.Path = candidate
+		return cfg, nil
+	}
+
+	return analyzerConfig{}, nil
+}
+
+func configCandidatePaths(paths []string) []string {
+	seen := map[string]bool{}
+	var candidates []string
+
+	addDir := func(dir string) {
+		if dir == "" {
+			return
+		}
+		for _, name := range []string{".yocto-lens.json", "yocto-lens.json"} {
+			candidate := filepath.Join(dir, name)
+			if seen[candidate] {
+				continue
+			}
+			seen[candidate] = true
+			candidates = append(candidates, candidate)
+		}
+	}
+
+	for _, input := range paths {
+		abs, err := filepath.Abs(input)
+		if err != nil {
+			continue
+		}
+
+		info, err := os.Stat(abs)
+		if err == nil && !info.IsDir() {
+			abs = filepath.Dir(abs)
+		}
+		addDir(abs)
+	}
+
+	if wd, err := os.Getwd(); err == nil {
+		addDir(wd)
+	}
+
+	return candidates
+}
+
+func applyAnalyzerConfig(findings []model.Finding, cfg analyzerConfig) []model.Finding {
+	if len(findings) == 0 {
+		return findings
+	}
+
+	filtered := make([]model.Finding, 0, len(findings))
+	for _, finding := range findings {
+		if ruleMatchesAny(finding.RuleID, cfg.DisabledRules) {
+			continue
+		}
+		if configMatchesPath(finding.File, "", cfg.Exclude) {
+			continue
+		}
+
+		if severity, ok := cfg.Severity[finding.RuleID]; ok && isValidSeverity(severity) {
+			finding.Severity = severity
+		}
+
+		filtered = append(filtered, finding)
+	}
+
+	return filtered
+}
+
+func isValidSeverity(severity model.Severity) bool {
+	switch severity {
+	case model.SeverityCritical, model.SeverityHigh, model.SeverityMedium, model.SeverityLow, model.SeverityInfo:
+		return true
+	default:
+		return false
+	}
+}
+
+func ruleMatchesAny(ruleID string, patterns []string) bool {
+	for _, pattern := range patterns {
+		if configPatternMatches(pattern, ruleID) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func configMatchesPath(path string, root string, patterns []string) bool {
+	if len(patterns) == 0 || strings.TrimSpace(path) == "" {
+		return false
+	}
+
+	candidates := []string{
+		filepath.ToSlash(filepath.Clean(path)),
+		filepath.Base(path),
+	}
+
+	if root != "" {
+		if rel, err := filepath.Rel(root, path); err == nil {
+			candidates = append(candidates, filepath.ToSlash(rel))
+		}
+	}
+
+	for _, pattern := range patterns {
+		for _, candidate := range candidates {
+			if configPatternMatches(pattern, candidate) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func configPatternMatches(pattern string, value string) bool {
+	pattern = filepath.ToSlash(strings.TrimSpace(pattern))
+	value = filepath.ToSlash(strings.TrimSpace(value))
+	if pattern == "" || value == "" {
+		return false
+	}
+
+	if pattern == value {
+		return true
+	}
+
+	re, err := regexp.Compile(globPatternRegexp(pattern))
+	if err != nil {
+		return false
+	}
+
+	return re.MatchString(value)
+}
+
+func globPatternRegexp(pattern string) string {
+	var b strings.Builder
+	b.WriteString("^")
+
+	for i := 0; i < len(pattern); i++ {
+		ch := pattern[i]
+		switch ch {
+		case '*':
+			if i+1 < len(pattern) && pattern[i+1] == '*' {
+				b.WriteString(".*")
+				i++
+			} else {
+				b.WriteString("[^/]*")
+			}
+		case '?':
+			b.WriteString("[^/]")
+		default:
+			b.WriteString(regexp.QuoteMeta(string(ch)))
+		}
+	}
+
+	b.WriteString("$")
+	return b.String()
 }
 
 func discoverLayers(paths []string, progress ProgressFunc) ([]model.Layer, error) {

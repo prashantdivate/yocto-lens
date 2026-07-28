@@ -53,12 +53,13 @@ type Finding struct {
 }
 
 type Report struct {
-	Root     string    `json:"root"`
-	Layers   []Layer   `json:"layers"`
-	Recipes  []Recipe  `json:"recipes"`
-	Appends  []Append  `json:"appends"`
-	Patches  []Patch   `json:"patches"`
-	Findings []Finding `json:"findings"`
+	Root          string    `json:"root"`
+	TargetRelease string    `json:"target_release,omitempty"`
+	Layers        []Layer   `json:"layers"`
+	Recipes       []Recipe  `json:"recipes"`
+	Appends       []Append  `json:"appends"`
+	Patches       []Patch   `json:"patches"`
+	Findings      []Finding `json:"findings"`
 }
 
 type ScanPhase string
